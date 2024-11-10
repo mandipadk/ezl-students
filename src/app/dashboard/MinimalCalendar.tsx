@@ -2,12 +2,13 @@
 
 import React, { useState } from 'react'
 import { addDays, startOfMonth, endOfMonth, eachDayOfInterval, format, isSameDay, isSameMonth, startOfWeek, endOfWeek, addWeeks, setHours, setMinutes, isSameWeek, parseISO, isWithinInterval } from 'date-fns'
-import { CalendarIcon, ChevronLeft, ChevronRight, Plus } from 'lucide-react'
+import { CalendarIcon, ChevronLeft, ChevronRight, Plus, Upload } from 'lucide-react'
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { createClient } from "@supabase/supabase-js";
 
 type Event = {
   id: string
@@ -58,6 +59,59 @@ export default function MinimalCalendar() {
     const event: Event = { ...newEvent, id: Date.now().toString() }
     setEvents(prevEvents => [...prevEvents, event])
     setNewEvent({ title: '', startDate: new Date(), endDate: new Date(), description: '' })
+  }
+
+  const handleImportEvents = async (file: File) => {
+    const text = await file.text()
+    const parsedEvents = parseICS(text)
+    const newEvents = parsedEvents.map(event => ({
+      ...event,
+      id: Date.now().toString()
+    }))
+    setEvents(prevEvents => [...prevEvents, ...newEvents])
+    await saveEventsToSupabase(newEvents)
+  }
+
+  const saveEventsToSupabase = async (events: Event[]) => {
+    const response = await fetch('/api/events', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(events),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+        console.error('Error saving events to Supabase:', data.error);
+    } else {
+        console.log('Events saved to Supabase:', data);
+    }
+}
+
+  const parseICS = (icsText: string): Omit<Event, 'id'>[] => {
+    const events: Omit<Event, 'id'>[] = []
+    const lines = icsText.split('\n')
+    let currentEvent: Partial<Omit<Event, 'id'>> = {}
+
+    lines.forEach(line => {
+      if (line.startsWith('BEGIN:VEVENT')) {
+        currentEvent = {}
+      } else if (line.startsWith('END:VEVENT')) {
+        if (currentEvent.title && currentEvent.startDate && currentEvent.endDate) {
+          events.push(currentEvent as Omit<Event, 'id'>)
+        }
+      } else if (line.startsWith('SUMMARY:')) {
+        currentEvent.title = line.replace('SUMMARY:', '').trim()
+      } else if (line.startsWith('DESCRIPTION:')) {
+        currentEvent.description = line.replace('DESCRIPTION:', '').trim()
+      } else if (line.startsWith('DTSTART:')) {
+        currentEvent.startDate = parseISO(line.replace('DTSTART:', '').trim())
+      } else if (line.startsWith('DTEND:')) {
+        currentEvent.endDate = parseISO(line.replace('DTEND:', '').trim())
+      }
+    })
+
+    return events
   }
 
   const renderMonthView = () => {
@@ -193,6 +247,7 @@ export default function MinimalCalendar() {
             <ChevronRight className="h-4 w-4" />
           </Button>
           <AddEventDialog newEvent={newEvent} setNewEvent={setNewEvent} handleAddEvent={handleAddEvent} />
+          <ImportEventsButton handleImportEvents={handleImportEvents} />
         </div>
       </div>
       <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -275,6 +330,37 @@ function AddEventDialog({ newEvent, setNewEvent, handleAddEvent }: {
       </DialogContent>
     </Dialog>
   )
+}
+
+function ImportEventsButton({ handleImportEvents }: { handleImportEvents: (file: File) => void }) {
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const handleButtonClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleImportEvents(e.target.files[0]);
+    }
+  };
+
+  return (
+    <label>
+      <Button size="sm" onClick={handleButtonClick}>
+        <Upload className="mr-2 h-4 w-4" /> Import
+      </Button>
+      <input
+        type="file"
+        accept=".ics"
+        onChange={handleFileChange}
+        ref={fileInputRef}
+        style={{ display: 'none' }}
+      />
+    </label>
+  );
 }
 
 function EventDetailsDialog({ event, setSelectedEvent }: { event: Event, setSelectedEvent: (event: Event | null) => void }) {
