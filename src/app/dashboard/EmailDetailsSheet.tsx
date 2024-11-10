@@ -7,7 +7,7 @@ import {
 } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Brain, Clock, MessageCircle } from "lucide-react";
+import { Brain, Clock, MessageCircle, WandSparkles } from "lucide-react";
 import { Email } from "./EmailCard";
 
 interface EmailDetailsSheetProps {
@@ -45,7 +45,7 @@ export function EmailDetailsSheet({ email, open, onOpenChange }: EmailDetailsShe
             {email.emailAnalysis && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <Brain className="h-5 w-5 animate-pulse" />
+                <WandSparkles className="h-5 w-5 text-blue-500 animate-pulse" />
                   <h3 className="text-lg font-bold">AI Email Analysis</h3>
                 </div>
                 <Separator />
@@ -78,18 +78,17 @@ export function EmailDetailsSheet({ email, open, onOpenChange }: EmailDetailsShe
             )}
 
             {/* Reply Information */}
-            {email.requiresReply !== undefined && (
-              <div className="space-y-2 bg-muted/30 p-4 rounded-lg">
-                <h3 className="text-lg font-bold">Is Reply Required?</h3>
-                <p className="text-base font-medium">{email.requiresReply ? "Yes" : "No"}</p>
-                {email.replyReason && (
-                  <>
-                    <p className="font-medium mt-2">Reason:</p>
-                    <p className="text-sm">{email.replyReason}</p>
-                  </>
-                )}
-              </div>
-            )}
+            <div className="space-y-2 bg-muted/30 p-4 rounded-lg">
+              <h3 className="text-lg font-bold">Is Reply Required?</h3>
+              <p className="text-base font-medium">{email.finalEmail ? "Yes" : "No"}</p>
+              {email.replyReason && email.finalEmail && (
+                <>
+                  <p className="font-medium mt-2">Reason:</p>
+                  <p className="text-sm">{email.replyReason}</p>
+                </>
+              )}
+            </div>
+            
 
             {/* AI Generated Reply */}
             {email.finalEmail && (

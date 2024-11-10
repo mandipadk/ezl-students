@@ -55,7 +55,7 @@ export default function EmailCard() {
   useEffect(() => {
     if (isAuthenticated && userId) {
       fetchEmails(userId);
-      const interval = setInterval(() => fetchEmails(userId), 60000); // Fetch emails every 20 seconds
+      const interval = setInterval(() => fetchEmails(userId), 120000); // Fetch emails every 20 seconds
       return () => clearInterval(interval);
     }
   }, [isAuthenticated, userId]);
