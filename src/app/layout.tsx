@@ -25,8 +25,11 @@ const geistMono = localFont({
 const manrope = Manrope({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: "Fluentite",
+  title: "ezl",
   description: "AI producitivy app for students",
+  icons: {
+    icon: "/favicon.png",
+  },
 };
 
 export default function RootLayout({

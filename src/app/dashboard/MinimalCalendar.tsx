@@ -2,13 +2,14 @@
 
 import React, { useState, useEffect } from 'react'
 import { addDays, startOfMonth, endOfMonth, eachDayOfInterval, format, isSameDay, isSameMonth, startOfWeek, endOfWeek, addWeeks, setHours, setMinutes, isSameWeek, parseISO, isWithinInterval } from 'date-fns'
-import { CalendarIcon, ChevronLeft, ChevronRight, Plus, Upload } from 'lucide-react'
+import { CalendarIcon, ChevronLeft, ChevronRight, Plus, Upload, Sparkles } from 'lucide-react'
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { createClient } from "@supabase/supabase-js";
+import { toast } from "sonner";
 
 type EventSource = 'base' | 'free' | 'assignment';
 
@@ -123,6 +124,8 @@ export default function MinimalCalendar() {
   const [view, setView] = useState<CalendarView>('week')
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [isAIProcessing, setIsAIProcessing] = useState(false);
+
   // Check authentication status on mount
   useEffect(() => {
     checkAuthentication();
@@ -753,6 +756,63 @@ const checkAuthentication = async () => {
     );
 };
 
+  const handleAIPrioritization = async () => {
+    if (!userId) {
+        toast.error("Please log in to use AI prioritization");
+        return;
+    }
+
+    try {
+        setIsAIProcessing(true);
+        toast.info("AI is analyzing your schedule. This may take up to 5 minutes.", {
+            duration: 10000,
+        });
+
+        const response = await fetch('http://localhost:7777/schedule', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                user_id: userId,
+            }),
+        });
+
+        if (response.ok) {
+            // Start polling for completion
+            const pollInterval = setInterval(async () => {
+                const pollResponse = await fetch(`http://localhost:7777/schedule/status?user_id=${userId}`);
+                const status = await pollResponse.json();
+                
+                if (status.completed) {
+                    clearInterval(pollInterval);
+                    setIsAIProcessing(false);
+                    await fetchCalenderEvents(userId);
+                    toast.success("Schedule has been optimized by AI!", {
+                        description: "Your calendar has been updated with the new prioritized schedule."
+                    });
+                }
+            }, 30000); // Poll every 30 seconds
+
+            // Clear interval after 6 minutes (timeout)
+            setTimeout(() => {
+                clearInterval(pollInterval);
+                if (isAIProcessing) {
+                    setIsAIProcessing(false);
+                    toast.error("AI prioritization is taking longer than expected. Please try again.");
+                }
+            }, 360000);
+
+        } else {
+            throw new Error("Failed to start AI prioritization");
+        }
+    } catch (error) {
+        console.error("Error in AI prioritization:", error);
+        setIsAIProcessing(false);
+        toast.error("Failed to prioritize schedule. Please try again.");
+    }
+};
+
   return (
     <div className="h-full flex flex-col">
         <div className="flex justify-between items-center mb-4">
@@ -775,6 +835,30 @@ const checkAuthentication = async () => {
                 </Button>
                 <Button onClick={handleNext} variant="ghost" size="icon">
                     <ChevronRight className="h-4 w-4" />
+                </Button>
+                <Button
+                    onClick={handleAIPrioritization}
+                    disabled={isAIProcessing}
+                    className={`
+                        relative overflow-hidden
+                        ${isAIProcessing ? 'animate-pulse' : 'animate-shimmer'}
+                        bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500
+                        text-white hover:from-blue-600 hover:via-purple-600 hover:to-pink-600
+                    `}
+                    size="sm"
+                >
+                    {isAIProcessing ? (
+                        <>
+                            <Sparkles className="mr-2 h-4 w-4 animate-spin" />
+                            AI Processing...
+                        </>
+                    ) : (
+                        <>
+                            <Sparkles className="mr-2 h-4 w-4 animate-bounce" />
+                            Prioritize with AI
+                        </>
+                    )}
+                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" />
                 </Button>
                 <AddEventDialog newEvent={newEvent} setNewEvent={setNewEvent} handleAddEvent={handleAddEvent} />
                 <ImportEventsButton handleImportEvents={handleImportEvents} />
