@@ -14,7 +14,7 @@ export default function NavBar() {
       <nav className="mx-auto flex h-20 max-w-7xl items-center justify-between px-6">
         <Link href="/" className="flex items-center gap-2">
           <Circle className="h-5 w-5 fill-[#FF5733] text-[#FF5733]" />
-          <span className="text-2xl font-semibold">Fluentite</span>
+          <span className="text-2xl font-semibold">ezl</span>
         </Link>
         <div className="flex items-center gap-6">
           <Link href="/" className="text-md text-gray-600 hover:text-gray-900">

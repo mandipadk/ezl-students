@@ -8,6 +8,7 @@ import { createClient } from "@supabase/supabase-js";
 import { useRouter } from 'next/navigation';
 import { EmailDetailsSheet } from "./EmailDetailsSheet";
 
+
 // Updated Email type definition to include all fields from the JSON response
 export type Email = {
   id: string | number;
@@ -47,6 +48,7 @@ export default function EmailCard() {
   const router = useRouter();
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+
 
   useEffect(() => {
     checkAuthentication();

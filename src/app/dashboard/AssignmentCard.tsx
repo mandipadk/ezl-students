@@ -399,11 +399,11 @@ export default function AssignmentCard() {
             {assignmentList.map((assignment) => (
                 <div key={assignment.id} className="flex items-center space-x-4">
                     {assignment.priority === "High" ? (
-                        <Flag className="h-6 w-6 text-red-500" fill="currentColor" />
+                        <Circle className="h-4 w-4 text-red-500" fill="currentColor"/>
                     ) : assignment.priority === "Medium" ? (
-                        <Flag className="h-6 w-6 text-yellow-500" fill="currentColor" />
+                        <Circle className="h-4 w-4 text-yellow-500"  />
                     ) : (
-                        <Flag className="h-6 w-6 text-blue-500" fill="currentColor" />
+                        <Circle className="h-6 w-6 text-blue-500"/>
                     )}
                     <div className="flex-1 space-y-1">
                         <p className="text-sm font-medium leading-none">{assignment.basic_info.title}</p>
@@ -413,7 +413,7 @@ export default function AssignmentCard() {
                     </div>
                     <Button
                         variant="outline"
-                        size="sm"
+                        size="lg"
                         onClick={() => {
                             setSelectedAssignment(assignment);
                             setSheetOpen(true);
@@ -421,9 +421,9 @@ export default function AssignmentCard() {
                     >
                         View
                     </Button>
-                    <Button variant="secondary" size="sm">
+                    {/* <Button variant="secondary" size="sm">
                         Ask for Extension
-                    </Button>
+                    </Button> */}
                 </div>
             ))}
             {selectedAssignment && (

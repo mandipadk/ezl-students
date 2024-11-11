@@ -18,7 +18,7 @@ export default function Dashboard() {
       </div>
 
       {/* Right Section (Calendar Placeholder) */}
-      <div className="w-full h-screen md:w-2/3 p-4 pl-0 pt-0">
+      <div className="w-full max-h-screen md:w-2/3 p-4 pl-0">
         {/* <CalendarCard></CalendarCard> */}
         <MinimalCalendar></MinimalCalendar>
       </div>
