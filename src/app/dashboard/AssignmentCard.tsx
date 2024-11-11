@@ -31,8 +31,8 @@ export type Assignment = {
         due_date_formatted: string;
         time_remaining: string;
         planned_time: number;
-        task_breakdown: Record<string, number>;
-        recommended_schedule: Record<string, string | Record<string, string | number>>;
+        task_breakdown?: Record<string, number>;
+        recommended_schedule?: Record<string, string | Record<string, string | number>>;
         buffer_time: string;
     };
     analysis?: {
@@ -342,7 +342,7 @@ export default function AssignmentCard() {
                 setIsFetching(false);
             }
             if (!data || data.length === 0) {
-                setErrorMessage("No assignments found. Please try again.");
+                setErrorMessage("No assignments found. Please try setting your Canvas token.");
                 setIsFetching(false);
             }
         } catch (error) {

@@ -145,11 +145,11 @@ const checkAuthentication = async () => {
     if (error) {
         console.error("Error checking authentication:", error);
     } else {
-        console.log("True from checkAuthentication");
+        console.log("True from checkAuthentication calendar");
         setIsAuthenticated(!!data.session);
         if (data.session?.user?.id) {
             setUserId(data.session.user.id);
-            console.log("User ID from AssignmentCard:", data.session.user.id);
+            console.log("User ID from Calendar:", data.session.user.id);
         }
     }
 };
@@ -757,7 +757,9 @@ const checkAuthentication = async () => {
 };
 
   const handleAIPrioritization = async () => {
+    console.log("Starting AI prioritization");
     if (!userId) {
+        console.log("No user ID found");
         toast.error("Please log in to use AI prioritization");
         return;
     }
@@ -781,6 +783,7 @@ const checkAuthentication = async () => {
         if (response.ok) {
             // Start polling for completion
             const pollInterval = setInterval(async () => {
+                console.log("Polling for schedule status");
                 const pollResponse = await fetch(`http://localhost:7777/schedule/status?user_id=${userId}`);
                 const status = await pollResponse.json();
                 
@@ -792,16 +795,22 @@ const checkAuthentication = async () => {
                         description: "Your calendar has been updated with the new prioritized schedule."
                     });
                 }
-            }, 30000); // Poll every 30 seconds
+            }, 10000); // Poll every 30 seconds
 
             // Clear interval after 6 minutes (timeout)
             setTimeout(() => {
+                console.log("Timeout reached. Clearing interval.");
                 clearInterval(pollInterval);
-                if (isAIProcessing) {
-                    setIsAIProcessing(false);
-                    toast.error("AI prioritization is taking longer than expected. Please try again.");
-                }
-            }, 360000);
+                console.log("Setting isAIProcessing to false");
+                setIsAIProcessing(false);
+                toast.error("AI prioritization is taking longer than expected. Please try again.");
+                // if (isAIProcessing) {
+                //     console.log("Setting isAIProcessing to false");
+                //     setIsAIProcessing(false);
+                //     toast.error("AI prioritization is taking longer than expected. Please try again.");
+                // }
+
+            }, 60000);
 
         } else {
             throw new Error("Failed to start AI prioritization");

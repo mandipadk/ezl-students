@@ -67,7 +67,7 @@ export function AssignmentDetailsSheet({ assignment, open, onOpenChange }: Assig
                                 <div className="mt-4">
                                     <p className="font-medium mb-2">Task Breakdown:</p>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                        {Object.entries(assignment.time_management.task_breakdown).map(([task, hours], index) => (
+                                        {Object.entries(assignment.time_management.task_breakdown || {}).map(([task, hours], index) => (
                                             <div key={index} className="bg-muted/30 p-2 rounded">
                                                 <p className="text-sm">{task}: {hours} hours</p>
                                             </div>
@@ -79,7 +79,7 @@ export function AssignmentDetailsSheet({ assignment, open, onOpenChange }: Assig
                                 <div className="mt-4">
                                     <p className="font-medium mb-2">Recommended Schedule:</p>
                                     <div className="space-y-2">
-                                        {Object.entries(assignment.time_management.recommended_schedule).map(([day, tasks], index) => (
+                                        {Object.entries(assignment.time_management.recommended_schedule || {}).map(([day, tasks], index) => (
                                             <div key={index} className="bg-muted/30 p-2 rounded">
                                                 <p className="text-sm font-medium">{day}:</p>
                                                 {typeof tasks === 'string' ? (
