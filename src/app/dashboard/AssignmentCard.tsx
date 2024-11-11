@@ -401,9 +401,9 @@ export default function AssignmentCard() {
                     {assignment.priority === "High" ? (
                         <Circle className="h-4 w-4 text-red-500" fill="currentColor"/>
                     ) : assignment.priority === "Medium" ? (
-                        <Circle className="h-4 w-4 text-yellow-500"  />
+                        <Circle className="h-4 w-4 text-yellow-500" fill="currentColor"/>
                     ) : (
-                        <Circle className="h-6 w-6 text-blue-500"/>
+                        <Circle className="h-4 w-4 text-blue-500" fill="currentColor"/>
                     )}
                     <div className="flex-1 space-y-1">
                         <p className="text-sm font-medium leading-none">{assignment.basic_info.title}</p>
@@ -524,11 +524,16 @@ export default function AssignmentCard() {
                                     <>
                                         {renderAssignmentList(sampleAssignments)}
                                         <div className="mt-4 pt-2 border-t">
-                                            <p className="text-sm text-muted-foreground text-center italic">
+                                            <p className="text-md text-muted-foreground text-center italic">
                                                 {tokenStatus === 'failed' ? (
                                                     "Failed to verify the access token, please try again!"
                                                 ) : (
-                                                    "Sample data for reference, set canvas token to see your assignments!"
+                                                    <>
+                                                        <strong>Sample Data</strong> 
+                                                        <span className="block mt-2">
+                                                            Login with Outlook & set Canvas token to see your assignments!
+                                                        </span>
+                                                    </>
                                                 )}
                                             </p>
                                         </div>

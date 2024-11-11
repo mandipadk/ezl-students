@@ -56,6 +56,65 @@ interface AddEventDialogProps {
     handleAddEvent: () => void;
 }
 
+// Add these helper functions at the top level
+const isOverlapping = (start1: Date, end1: Date, start2: Date, end2: Date) => {
+    return start1 < end2 && end1 > start2;
+};
+
+const checkEventConflicts = (newEvent: Event, existingEvents: Event[]) => {
+    return existingEvents.some(existingEvent => 
+        isOverlapping(
+            new Date(newEvent.startDate),
+            new Date(newEvent.endDate),
+            new Date(existingEvent.startDate),
+            new Date(existingEvent.endDate)
+        )
+    );
+};
+
+// Function to validate event placement
+const validateEventPlacement = async (userId: string, newEvent: Event) => {
+    // Get all base events
+    const { data: baseEventsData } = await supabase
+        .from('BaseCalendarEvents')
+        .select('json_response')
+        .eq('user_id', userId)
+        .single();
+
+    const baseEvents = baseEventsData?.json_response?.events || [];
+
+    // Check if the new event conflicts with any base events
+    const hasBaseConflict = checkEventConflicts(newEvent, baseEvents);
+
+    if (hasBaseConflict) {
+        return {
+            valid: false,
+            message: "This time slot conflicts with a base event"
+        };
+    }
+
+    // If it's an assignment event, check if it overlaps with any free time
+    if (newEvent.source === 'assignment') {
+        const { data: freeTimeData } = await supabase
+            .from('FreeTimeCal')
+            .select('json_response')
+            .eq('user_id', userId)
+            .single();
+
+        const freeTimeEvents = freeTimeData?.json_response?.events || [];
+        const hasFreetimeOverlap = checkEventConflicts(newEvent, freeTimeEvents);
+
+        if (!hasFreetimeOverlap) {
+            return {
+                valid: false,
+                message: "Assignment must be scheduled during free time"
+            };
+        }
+    }
+
+    return { valid: true };
+};
+
 export default function MinimalCalendar() {
   const [currentDate, setCurrentDate] = useState(new Date())
   const [events, setEvents] = useState<Event[]>([])
@@ -96,30 +155,17 @@ const checkAuthentication = async () => {
         try {
             console.log("Fetching calendar events for user:", userId);
             // Fetch from all three tables in parallel
-            const { data, error } = await supabase
-                .from('BaseCalendarEvents')
-                .select('json_response')
-                .eq('user_id', userId);
-            if (data) {
-                console.log("Base events:", data);
-            } else {
-                console.log("No base events found");
-            }
-
             const [baseEvents, freeTimeEvents, assignmentEvents] = await Promise.all([
-                // Base calendar events
                 supabase
                     .from('BaseCalendarEvents')
                     .select('json_response')
                     .eq('user_id', userId),
 
-                // Free time events
                 supabase
                     .from('FreeTimeCal')
                     .select('json_response')
                     .eq('user_id', userId),
 
-                // Assignment events
                 supabase
                     .from('AssignmentCal')
                     .select('json_response')
@@ -128,9 +174,7 @@ const checkAuthentication = async () => {
 
             let allEvents: Event[] = [];
 
-            
-
-            // Process base events if they exist
+            // Process base events first (they take precedence)
             if (baseEvents.data && baseEvents.data.length > 0 && baseEvents.data[0].json_response?.events) {
                 const events = baseEvents.data[0].json_response.events.map((event: any) => ({
                     ...event,
@@ -140,36 +184,42 @@ const checkAuthentication = async () => {
                 }));
                 allEvents = [...allEvents, ...events];
                 console.log("Base events fetched:", events);
-            } else {
-                console.log("No base events found", baseEvents.data);
             }
 
-            // Process free time events if they exist
+            // Process free time events that don't conflict with base events
             if (freeTimeEvents.data && freeTimeEvents.data.length > 0 && freeTimeEvents.data[0].json_response?.events) {
-                const events = freeTimeEvents.data[0].json_response.events.map((event: any) => ({
-                    ...event,
-                    startDate: new Date(event.startDate),
-                    endDate: new Date(event.endDate),
-                    source: 'free' as EventSource
-                }));
-                allEvents = [...allEvents, ...events];
-                console.log("Free time events fetched:", events);
-            } else {
-                console.log("No free time events found");
+                const freeEvents = freeTimeEvents.data[0].json_response.events
+                    .filter((freeEvent: Event) => !checkEventConflicts(freeEvent, allEvents))
+                    .map((event: any) => ({
+                        ...event,
+                        startDate: new Date(event.startDate),
+                        endDate: new Date(event.endDate),
+                        source: 'free' as EventSource
+                    }));
+                allEvents = [...allEvents, ...freeEvents];
+                console.log("Free time events fetched:", freeEvents);
             }
 
-            // Process assignment events if they exist
+            // Process assignment events that overlap with free time and don't conflict with base events
             if (assignmentEvents.data && assignmentEvents.data.length > 0 && assignmentEvents.data[0].json_response?.events) {
-                const events = assignmentEvents.data[0].json_response.events.map((event: any) => ({
-                    ...event,
-                    startDate: new Date(event.startDate),
-                    endDate: new Date(event.endDate),
-                    source: 'assignment' as EventSource
-                }));
-                allEvents = [...allEvents, ...events];
-                console.log("Assignment events fetched:", events);
-            } else {
-                console.log("No assignment events found");
+                const assignmentEvts = assignmentEvents.data[0].json_response.events
+                    .filter((assignmentEvent: Event) => {
+                        const baseEventsArray = baseEvents.data?.[0]?.json_response?.events || [];
+                        const freeTimeEventsArray = freeTimeEvents.data?.[0]?.json_response?.events || [];
+                        
+                        const hasBaseConflict = checkEventConflicts(assignmentEvent, baseEventsArray);
+                        const hasFreeTimeOverlap = checkEventConflicts(assignmentEvent, freeTimeEventsArray);
+                        
+                        return !hasBaseConflict && hasFreeTimeOverlap;
+                    })
+                    .map((event: any) => ({
+                        ...event,
+                        startDate: new Date(event.startDate),
+                        endDate: new Date(event.endDate),
+                        source: 'assignment' as EventSource
+                    }));
+                allEvents = [...allEvents, ...assignmentEvts];
+                console.log("Assignment events fetched:", assignmentEvts);
             }
 
             // Log any errors but don't fail
@@ -177,7 +227,7 @@ const checkAuthentication = async () => {
             if (freeTimeEvents.error) console.log("Free time events error:", freeTimeEvents.error);
             if (assignmentEvents.error) console.log("Assignment events error:", assignmentEvents.error);
 
-            // Set events even if some tables were empty
+            // Set all events
             setEvents(allEvents);
             console.log("All events set:", allEvents);
 
@@ -214,6 +264,7 @@ const checkAuthentication = async () => {
     }
   }
 
+  // Update handleAddEvent to use fetchCalenderEvents instead of fetchAllEvents
   const handleAddEvent = async () => {
     const event: Event = { 
         ...newEvent, 
@@ -222,34 +273,17 @@ const checkAuthentication = async () => {
     
     try {
         if (userId) {
-            // First, check if this new event overlaps with any base events
-            if (event.source === 'free') {
-                const { data: baseEventsData } = await supabase
-                    .from('BaseCalendarEvents')
-                    .select('json_response')
-                    .eq('user_id', userId)
-                    .single();
-
-                if (baseEventsData?.json_response?.events) {
-                    const hasOverlap = baseEventsData.json_response.events.some((baseEvent: Event) => {
-                        return isOverlapping(
-                            new Date(event.startDate),
-                            new Date(event.endDate),
-                            new Date(baseEvent.startDate),
-                            new Date(baseEvent.endDate)
-                        );
-                    });
-
-                    if (hasOverlap) {
-                        alert("Cannot create free time event that overlaps with base events!");
-                        return;
-                    }
-                }
+            // Validate event placement
+            const validation = await validateEventPlacement(userId, event);
+            if (!validation.valid) {
+                alert(validation.message);
+                return;
             }
 
-            // Get existing events
+            // Get existing events of the same type
             const { data: existingData } = await supabase
-                .from(event.source === 'base' ? 'BaseCalendarEvents' : 'FreeTimeCal')
+                .from(event.source === 'base' ? 'BaseCalendarEvents' : 
+                      event.source === 'free' ? 'FreeTimeCal' : 'AssignmentCal')
                 .select('json_response')
                 .eq('user_id', userId)
                 .single();
@@ -262,9 +296,15 @@ const checkAuthentication = async () => {
             // Add the new event
             allEvents.push(event);
 
+            // If it's a base event, remove any conflicting free time or assignment events
+            if (event.source === 'base') {
+                await removeConflictingEvents(userId, event);
+            }
+
             // Update the database
             const { error: insertError } = await supabase
-                .from(event.source === 'base' ? 'BaseCalendarEvents' : 'FreeTimeCal')
+                .from(event.source === 'base' ? 'BaseCalendarEvents' : 
+                      event.source === 'free' ? 'FreeTimeCal' : 'AssignmentCal')
                 .upsert({
                     user_id: userId,
                     json_response: {
@@ -277,7 +317,8 @@ const checkAuthentication = async () => {
             if (insertError) {
                 console.error("Error saving event:", insertError.message);
             } else {
-                setEvents(prevEvents => [...prevEvents, event]);
+                // Refresh all events using the existing function
+                await fetchCalenderEvents(userId);
                 setNewEvent({
                     title: '',
                     startDate: new Date(),
@@ -293,172 +334,170 @@ const checkAuthentication = async () => {
 };
 
   const handleImportEvents = async (file: File) => {
-    const text = await file.text()
-    const parsedEvents = parseICS(text)
-    const newEvents = parsedEvents.map(event => ({
-      ...event,
-      id: Date.now().toString()
-    }))
-    setEvents(prevEvents => [...prevEvents, ...newEvents])
-    await saveBaseEventsToSupabase(newEvents)
-  }
-
-  const saveBaseEventsToSupabase = async (newEvents: Event[]) => {
     try {
-        // First, get existing base events
-        const { data: existingBaseData } = await supabase
-            .from('BaseCalendarEvents')
-            .select('json_response')
-            .eq('user_id', userId)
-            .single();
-
-        // Get existing free time events
-        const { data: existingFreeData } = await supabase
-            .from('FreeTimeCal')
-            .select('json_response')
-            .eq('user_id', userId)
-            .single();
-
-        let allBaseEvents: Event[] = [];
-        let allFreeEvents: Event[] = [];
+        console.log("Starting file import process...");
         
-        // Combine existing and new base events
-        if (existingBaseData?.json_response?.events) {
-            allBaseEvents = [...existingBaseData.json_response.events];
-        }
-        allBaseEvents = [...allBaseEvents, ...newEvents];
+        // 1. Read the file
+        const text = await file.text();
+        console.log("File read successfully");
 
-        // Filter free time events to remove any that overlap with base events
-        if (existingFreeData?.json_response?.events) {
-            allFreeEvents = existingFreeData.json_response.events.filter((freeEvent: Event) => {
-                return !allBaseEvents.some(baseEvent => 
-                    isOverlapping(
-                        new Date(freeEvent.startDate),
-                        new Date(freeEvent.endDate),
-                        new Date(baseEvent.startDate),
-                        new Date(baseEvent.endDate)
-                    )
-                );
-            });
+        // 2. Parse the ICS file
+        const parsedEvents = parseICS(text);
+        console.log("Parsed events:", parsedEvents);
+
+        if (!parsedEvents.length) {
+            console.error("No events were parsed from the file");
+            return;
         }
 
-        // Update both tables
-        await Promise.all([
-            // Update base events
-            supabase
-                .from('BaseCalendarEvents')
-                .upsert({
-                    user_id: userId,
-                    json_response: {
-                        events: allBaseEvents
-                    }
-                }, {
-                    onConflict: 'user_id'
-                }),
+        // 3. Add IDs and prepare events for saving
+        const newEvents = parsedEvents.map(event => ({
+            ...event,
+            id: `import-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        }));
+        console.log("Prepared events for saving:", newEvents);
 
-            // Update free time events (with overlapping ones removed)
-            supabase
-                .from('FreeTimeCal')
-                .upsert({
-                    user_id: userId,
-                    json_response: {
-                        events: allFreeEvents
-                    }
-                }, {
-                    onConflict: 'user_id'
-                })
-        ]);
+        // 4. Save to Supabase
+        await saveBaseEventsToSupabase(newEvents);
 
-        // Update local state
-        setEvents([...allBaseEvents, ...allFreeEvents]);
+        // 5. Update local state only after successful save
+        setEvents(prevEvents => {
+            const updatedEvents = [...prevEvents, ...newEvents];
+            console.log("Updated local state with new events:", updatedEvents);
+            return updatedEvents;
+        });
 
     } catch (error) {
-        console.error("Unexpected error saving events to Supabase:", error);
+        console.error("Error in handleImportEvents:", error);
+        alert("Failed to import events. Please try again.");
+    }
+};
+
+  const saveBaseEventsToSupabase = async (newEvents: Event[]) => {
+    if (!userId) {
+        console.error("No user ID available");
+        return;
+    }
+
+    try {
+        console.log("Starting saveBaseEventsToSupabase...");
+        
+        // 1. Fetch existing base events
+        const { data: existingBaseData, error: baseError } = await supabase
+            .from('BaseCalendarEvents')
+            .select('*')
+            .eq('user_id', userId)
+            .single();
+
+        if (baseError && baseError.code !== 'PGRST116') {
+            console.error("Error fetching base events:", baseError);
+            throw new Error(`Failed to fetch base events: ${baseError.message}`);
+        }
+
+        // 2. Combine existing and new events
+        let allBaseEvents: Event[] = [];
+        if (existingBaseData?.json_response?.events) {
+            allBaseEvents = [...existingBaseData.json_response.events];
+            console.log("Existing base events:", allBaseEvents);
+        }
+        
+        allBaseEvents = [...allBaseEvents, ...newEvents];
+        console.log("Combined events:", allBaseEvents);
+
+        // 3. Delete existing record if it exists
+        if (existingBaseData) {
+            const { error: deleteError } = await supabase
+                .from('BaseCalendarEvents')
+                .delete()
+                .eq('user_id', userId);
+
+            if (deleteError) {
+                console.error("Error deleting existing events:", deleteError);
+                throw new Error(`Failed to delete existing events: ${deleteError.message}`);
+            }
+        }
+
+        // 4. Insert new record
+        const { error: insertError } = await supabase
+            .from('BaseCalendarEvents')
+            .insert({
+                user_id: userId,
+                json_response: {
+                    events: allBaseEvents
+                }
+            });
+
+        if (insertError) {
+            console.error("Error inserting base events:", insertError);
+            throw new Error(`Failed to insert base events: ${insertError.message}`);
+        }
+
+        console.log("Successfully saved all events to Supabase");
+        return { allBaseEvents };
+
+    } catch (error) {
+        console.error("Error in saveBaseEventsToSupabase:", error);
+        throw error;
     }
 };
 
   const parseICS = (icsText: string): Omit<Event, 'id'>[] => {
     const events: Omit<Event, 'id'>[] = [];
     const lines = icsText.split('\n');
-    let currentEvent: Partial<Omit<Event, 'id'>> = {
-        source: 'base' // Set default source for imported events
+    let currentEvent: Partial<Omit<Event, 'id'>> = {};
+
+    const parseDateTime = (dateTimeStr: string): Date => {
+        // Remove any TZID if present
+        const cleanStr = dateTimeStr.includes(':') ? dateTimeStr.split(':').pop()! : dateTimeStr;
+        
+        // Parse the date string
+        const year = parseInt(cleanStr.substr(0, 4));
+        const month = parseInt(cleanStr.substr(4, 2)) - 1; // months are 0-based
+        const day = parseInt(cleanStr.substr(6, 2));
+        const hour = parseInt(cleanStr.substr(9, 2));
+        const minute = parseInt(cleanStr.substr(11, 2));
+        const second = parseInt(cleanStr.substr(13, 2));
+
+        return new Date(year, month, day, hour, minute, second);
     };
 
     lines.forEach(line => {
         const cleanLine = line.trim();
         
         if (cleanLine.startsWith('BEGIN:VEVENT')) {
-            currentEvent = {};
+            currentEvent = { source: 'base' as EventSource };
         } else if (cleanLine.startsWith('END:VEVENT')) {
             if (currentEvent.title && currentEvent.startDate && currentEvent.endDate) {
                 events.push({
                     ...currentEvent,
-                    source: 'base',
-                    description: currentEvent.description || ''
+                    source: 'base' as EventSource,
+                    description: currentEvent.description || '',
+                    title: currentEvent.title,
+                    startDate: currentEvent.startDate,
+                    endDate: currentEvent.endDate
                 } as Omit<Event, 'id'>);
             }
-            currentEvent = { source: 'base' }; // Reset with default source
+            currentEvent = { source: 'base' as EventSource };
         } else if (cleanLine.startsWith('SUMMARY:')) {
             currentEvent.title = cleanLine.replace('SUMMARY:', '').trim();
         } else if (cleanLine.startsWith('DESCRIPTION:')) {
             currentEvent.description = cleanLine.replace('DESCRIPTION:', '').trim();
         } else if (cleanLine.startsWith('DTSTART')) {
-            // Handle different date formats
-            const dateStr = cleanLine.includes('TZID=') 
-                ? cleanLine.split(':')[1].trim()  // For dates with timezone
-                : cleanLine.replace('DTSTART:', '').trim();  // For UTC dates
-            
             try {
-                // Parse the date considering timezone if present
-                if (cleanLine.includes('TZID=')) {
-                    const tzid = cleanLine.match(/TZID=([^:]+):/)?.[1];
-                    const date = new Date(dateStr.replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/, '$1-$2-$3T$4:$5:$6'));
-                    currentEvent.startDate = date;
-                } else {
-                    const date = new Date(dateStr.replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/, '$1-$2-$3T$4:$5:$6Z'));
-                    currentEvent.startDate = date;
-                }
+                currentEvent.startDate = parseDateTime(cleanLine.split(':').pop()!);
             } catch (error) {
-                console.error('Error parsing start date:', error);
+                console.error('Error parsing start date:', error, cleanLine);
             }
         } else if (cleanLine.startsWith('DTEND')) {
-            // Handle different date formats
-            const dateStr = cleanLine.includes('TZID=')
-                ? cleanLine.split(':')[1].trim()  // For dates with timezone
-                : cleanLine.replace('DTEND:', '').trim();  // For UTC dates
-            
             try {
-                // Parse the date considering timezone if present
-                if (cleanLine.includes('TZID=')) {
-                    const tzid = cleanLine.match(/TZID=([^:]+):/)?.[1];
-                    const date = new Date(dateStr.replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/, '$1-$2-$3T$4:$5:$6'));
-                    currentEvent.endDate = date;
-                } else {
-                    const date = new Date(dateStr.replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/, '$1-$2-$3T$4:$5:$6Z'));
-                    currentEvent.endDate = date;
-                }
+                currentEvent.endDate = parseDateTime(cleanLine.split(':').pop()!);
             } catch (error) {
-                console.error('Error parsing end date:', error);
-            }
-        } else if (cleanLine.startsWith('LOCATION:')) {
-            // Add location to description if present
-            const location = cleanLine.replace('LOCATION:', '').trim();
-            if (location) {
-                currentEvent.description = currentEvent.description 
-                    ? `${currentEvent.description}\nLocation: ${location}`
-                    : `Location: ${location}`;
-            }
-        } else if (cleanLine.startsWith('RRULE:')) {
-            // Add recurrence info to description
-            const rrule = cleanLine.replace('RRULE:', '').trim();
-            if (rrule) {
-                currentEvent.description = currentEvent.description 
-                    ? `${currentEvent.description}\nRecurs: ${rrule}`
-                    : `Recurs: ${rrule}`;
+                console.error('Error parsing end date:', error, cleanLine);
             }
         }
     });
 
+    console.log("Parsed events:", events);
     return events;
 };
 
@@ -482,7 +521,7 @@ const checkAuthentication = async () => {
     return (
       <div className="grid grid-cols-7 gap-px bg-gray-200">
         {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (  
-          <div key={day} className="bg-white p-3 text-sm font-semibold text-gray-600">
+          <div key={`header-${day}`} className="bg-white p-3 text-sm font-semibold text-gray-600">
             {day}
           </div>
         ))}
@@ -497,7 +536,7 @@ const checkAuthentication = async () => {
           
           return (
             <div
-              key={index}
+              key={`day-${day.toISOString()}`}
               className={`bg-white min-h-[120px] p-2 relative ${
                 !isCurrentMonth ? 'bg-gray-50' : ''
               }`}
@@ -520,7 +559,11 @@ const checkAuthentication = async () => {
               </div>
 
               <div className="space-y-1 overflow-hidden">
-                {dayEvents.slice(0, 3).map(event => renderEventInCell(event))}
+                {dayEvents.slice(0, 3).map((event, eventIndex) => (
+                  <div key={`${event.id}-${eventIndex}-${day.toISOString()}`}>
+                    {renderEventInCell(event, day.toISOString())}
+                  </div>
+                ))}
               </div>
             </div>
           );
@@ -560,81 +603,81 @@ const checkAuthentication = async () => {
     const today = new Date();
 
     return (
-      <ScrollArea className="w-full">
-        <div className="grid grid-cols-8 gap-px bg-gray-200">
-          <div className="bg-white"></div>
-          {weekDays.map(day => {
-            const isToday = isSameDay(day, today);
-            return (
-              <div 
-                key={day.toString()} 
-                className={`
-                  text-sm font-medium p-2
-                  ${isToday ? 'bg-blue-50' : 'bg-white'}
-                  ${isToday ? 'text-blue-700 font-bold' : 'text-gray-500'}
-                `}
-              >
-                <div className={`
-                  flex flex-col items-center
-                  ${isToday ? 'bg-blue-500 text-white rounded-full p-1' : ''}
-                `}>
-                  <span>{format(day, 'EEE')}</span>
-                  <span>{format(day, 'd')}</span>
-                </div>
-              </div>
-            );
-          })}
-          {Array.from({ length: 24 }).map((_, hour) => (
-            <React.Fragment key={hour}>
-              <div className="text-sm text-gray-500 p-2 bg-white">
-                {format(setHours(new Date(), hour), 'ha')}
-              </div>
-              {weekDays.map(day => {
-                const isToday = isSameDay(day, today);
-                const cellDate = setHours(day, hour);
-                const cellEvents = events.filter(event => {
-                  const eventStart = new Date(event.startDate);
-                  const eventEnd = new Date(event.endDate);
-                  return isWithinInterval(cellDate, { 
-                    start: setMinutes(eventStart, 0), 
-                    end: setMinutes(eventEnd, 59) 
-                  });
-                });
-
-                return (
-                  <div 
-                    key={cellDate.toString()} 
-                    className={`
-                      relative h-[100px] border-t border-gray-100
-                      ${isToday ? 'bg-blue-50' : 'bg-white'}
-                    `}
-                  >
-                    {cellEvents.map(event => {
-                      const styles = calculateEventStyles(event, hour);
-                      if (!styles) return null;
-                      
-                      const colors = EVENT_COLORS[event.source];
-                      return (
-                        <div
-                          key={event.id}
-                          style={styles}
-                          className={`rounded-md p-2 cursor-pointer ${colors.bg} ${colors.text} hover:opacity-90 transition-opacity`}
-                          onClick={() => setSelectedEvent(event)}
+        <ScrollArea className="w-full">
+            <div className="grid grid-cols-8 gap-px bg-gray-200">
+                <div className="bg-white"></div>
+                {weekDays.map(day => {
+                    const isToday = isSameDay(day, today);
+                    return (
+                        <div 
+                            key={`header-${day.toISOString()}`}
+                            className={`
+                                text-sm font-medium p-2
+                                ${isToday ? 'bg-blue-50' : 'bg-white'}
+                                ${isToday ? 'text-blue-700 font-bold' : 'text-gray-500'}
+                            `}
                         >
-                          <p className="text-sm font-semibold truncate">{event.title}</p>
-                          <p className="text-xs truncate">
-                            {format(new Date(event.startDate), 'h:mm a')} - {format(new Date(event.endDate), 'h:mm a')}
-                          </p>
+                            <div className={`
+                                flex flex-col items-center
+                                ${isToday ? 'bg-blue-500 text-white rounded-full p-1' : ''}
+                            `}>
+                                <span>{format(day, 'EEE')}</span>
+                                <span>{format(day, 'd')}</span>
+                            </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </React.Fragment>
-          ))}
-        </div>
-      </ScrollArea>
+                    );
+                })}
+                {Array.from({ length: 24 }).map((_, hour) => (
+                    <React.Fragment key={`hour-${hour}`}>
+                        <div className="text-sm text-gray-500 p-2 bg-white">
+                            {format(setHours(new Date(), hour), 'ha')}
+                        </div>
+                        {weekDays.map(day => {
+                            const isToday = isSameDay(day, today);
+                            const cellDate = setHours(day, hour);
+                            const cellEvents = events.filter(event => {
+                                const eventStart = new Date(event.startDate);
+                                const eventEnd = new Date(event.endDate);
+                                return isWithinInterval(cellDate, { 
+                                    start: setMinutes(eventStart, 0), 
+                                    end: setMinutes(eventEnd, 59) 
+                                });
+                            });
+
+                            return (
+                                <div 
+                                    key={`cell-${day.toISOString()}-${hour}`}
+                                    className={`
+                                        relative h-[100px] border-t border-gray-100
+                                        ${isToday ? 'bg-blue-50' : 'bg-white'}
+                                    `}
+                                >
+                                    {cellEvents.map(event => {
+                                        const styles = calculateEventStyles(event, hour);
+                                        if (!styles) return null;
+                                        
+                                        const colors = EVENT_COLORS[event.source];
+                                        return (
+                                            <div
+                                                key={`event-${event.id}-${hour}`}
+                                                style={styles}
+                                                className={`rounded-md p-2 cursor-pointer ${colors.bg} ${colors.text} hover:opacity-90 transition-opacity`}
+                                                onClick={() => setSelectedEvent(event)}
+                                            >
+                                                <p className="text-sm font-semibold truncate">{event.title}</p>
+                                                <p className="text-xs truncate">
+                                                    {format(new Date(event.startDate), 'h:mm a')} - {format(new Date(event.endDate), 'h:mm a')}
+                                                </p>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            );
+                        })}
+                    </React.Fragment>
+                ))}
+            </div>
+        </ScrollArea>
     );
   };
 
@@ -687,21 +730,28 @@ const checkAuthentication = async () => {
     );
   };
 
-  const renderEventInCell = (event: Event) => {
-    const colors = EVENT_COLORS[event.source];
+  const renderEventInCell = (event: Event, dayString: string) => {
+    const source = event.source && EVENT_COLORS.hasOwnProperty(event.source) 
+        ? event.source 
+        : 'base';
+    
+    const colors = EVENT_COLORS[source];
+    const eventId = typeof event.id === 'number' ? `event-${event.id}` : event.id;
+    const startDate = new Date(event.startDate);
+    
     return (
-      <div 
-        key={event.id} 
-        className={`flex items-center gap-1 px-2 py-1 rounded-md mb-1 ${colors.bg} ${colors.text} hover:opacity-90 cursor-pointer transition-opacity`}
-        onClick={() => setSelectedEvent(event)}
-      >
-        <span className={`w-2 h-2 rounded-full ${colors.dot} flex-shrink-0`}></span>
-        <span className="truncate text-sm font-medium">
-          {format(new Date(event.startDate), 'HH:mm')} {event.title}
-        </span>
-      </div>
+        <div 
+            key={`${eventId}-${dayString}-${startDate.toISOString()}`}
+            className={`flex items-center gap-1 px-2 py-1 rounded-md mb-1 ${colors.bg} ${colors.text} hover:opacity-90 cursor-pointer transition-opacity`}
+            onClick={() => setSelectedEvent(event)}
+        >
+            <span className={`w-2 h-2 rounded-full ${colors.dot} flex-shrink-0`}></span>
+            <span className="truncate text-sm font-medium">
+                {format(startDate, 'HH:mm')} {event.title}
+            </span>
+        </div>
     );
-  };
+};
 
   return (
     <div className="h-full flex flex-col">
@@ -763,7 +813,11 @@ function EventButton({ event, setSelectedEvent }: {
   event: Event, 
   setSelectedEvent: (event: Event) => void 
 }) {
-  const colors = EVENT_COLORS[event.source];
+  const source = event.source && EVENT_COLORS.hasOwnProperty(event.source) 
+      ? event.source 
+      : 'base';
+  const colors = EVENT_COLORS[source];
+  const startDate = new Date(event.startDate); // Convert string to Date object
   
   return (
     <Button
@@ -774,7 +828,7 @@ function EventButton({ event, setSelectedEvent }: {
       <div className="flex items-center gap-1">
         <span className={`w-2 h-2 rounded-full ${colors.dot}`}></span>
         <span className="truncate">
-          {format(new Date(event.startDate), 'HH:mm')} {event.title}
+          {format(startDate, 'HH:mm')} {event.title}
         </span>
       </div>
     </Button>
@@ -883,43 +937,49 @@ function ImportEventsButton({ handleImportEvents }: { handleImportEvents: (file:
   );
 }
 
-function EventDetailsDialog({ event, setSelectedEvent }: { event: Event, setSelectedEvent: (event: Event | null) => void }) {
-  const colors = EVENT_COLORS[event.source];
-  
-  return (
-    <Dialog open={true} onOpenChange={() => setSelectedEvent(null)}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="text-xl flex items-center gap-2">
-            <span className={`w-3 h-3 rounded-full ${colors.dot}`}></span>
-            {event.title}
-          </DialogTitle>
-          <DialogDescription className="text-base pt-2">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-4">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Start</p>
-                  <p className="text-base font-semibold">{format(event.startDate, 'PPP')}</p>
-                  <p className="text-sm font-medium">{format(event.startDate, 'p')}</p>
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">End</p>
-                  <p className="text-base font-semibold">{format(event.endDate, 'PPP')}</p>
-                  <p className="text-sm font-medium">{format(event.endDate, 'p')}</p>
-                </div>
-              </div>
-              {event.description && (
-                <div className="space-y-1">
-                  <p className="text-sm font-medium text-muted-foreground">Description</p>
-                  <p className="text-sm leading-relaxed">{event.description}</p>
-                </div>
-              )}
-            </div>
-          </DialogDescription>
-        </DialogHeader>
-      </DialogContent>
-    </Dialog>
-  );
+function EventDetailsDialog({ event, setSelectedEvent }: { 
+    event: Event, 
+    setSelectedEvent: (event: Event | null) => void 
+}) {
+    const source = event.source && EVENT_COLORS.hasOwnProperty(event.source) 
+        ? event.source 
+        : 'base';
+    const colors = EVENT_COLORS[source];
+    
+    return (
+        <Dialog open={true} onOpenChange={() => setSelectedEvent(null)}>
+            <DialogContent className="max-w-2xl">
+                <DialogHeader>
+                    <DialogTitle className="text-xl flex items-center gap-2">
+                        <span className={`w-3 h-3 rounded-full ${colors.dot}`}></span>
+                        {event.title}
+                    </DialogTitle>
+                    <DialogDescription className="text-base pt-2">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-4">
+                                <div>
+                                    <p className="text-sm font-medium text-muted-foreground">Start</p>
+                                    <p className="text-base font-semibold">{format(event.startDate, 'PPP')}</p>
+                                    <p className="text-sm font-medium">{format(event.startDate, 'p')}</p>
+                                </div>
+                                <div>
+                                    <p className="text-sm font-medium text-muted-foreground">End</p>
+                                    <p className="text-base font-semibold">{format(event.endDate, 'PPP')}</p>
+                                    <p className="text-sm font-medium">{format(event.endDate, 'p')}</p>
+                                </div>
+                            </div>
+                            {event.description && (
+                                <div className="space-y-1">
+                                    <p className="text-sm font-medium text-muted-foreground">Description</p>
+                                    <p className="text-sm leading-relaxed">{event.description}</p>
+                                </div>
+                            )}
+                        </div>
+                    </DialogDescription>
+                </DialogHeader>
+            </DialogContent>
+        </Dialog>
+    );
 }
 
 const CalendarLegend = () => (
@@ -933,7 +993,54 @@ const CalendarLegend = () => (
   </div>
 );
 
-// Helper function to check if two time periods overlap
-const isOverlapping = (start1: Date, end1: Date, start2: Date, end2: Date) => {
-    return start1 < end2 && end1 > start2;
+// Function to remove conflicting events
+const removeConflictingEvents = async (userId: string, baseEvent: Event) => {
+    try {
+        // Get free time events
+        const { data: freeTimeData } = await supabase
+            .from('FreeTimeCal')
+            .select('json_response')
+            .eq('user_id', userId)
+            .single();
+
+        // Get assignment events
+        const { data: assignmentData } = await supabase
+            .from('AssignmentCal')
+            .select('json_response')
+            .eq('user_id', userId)
+            .single();
+
+        // Filter out conflicting events
+        if (freeTimeData?.json_response?.events) {
+            const filteredFreeTime = freeTimeData.json_response.events.filter((event: Event) => 
+                !checkEventConflicts(baseEvent, [event])
+            );
+
+            await supabase
+                .from('FreeTimeCal')
+                .upsert({
+                    user_id: userId,
+                    json_response: { events: filteredFreeTime }
+                }, {
+                    onConflict: 'user_id'
+                });
+        }
+
+        if (assignmentData?.json_response?.events) {
+            const filteredAssignments = assignmentData.json_response.events.filter((event: Event) => 
+                !checkEventConflicts(baseEvent, [event])
+            );
+
+            await supabase
+                .from('AssignmentCal')
+                .upsert({
+                    user_id: userId,
+                    json_response: { events: filteredAssignments }
+                }, {
+                    onConflict: 'user_id'
+                });
+        }
+    } catch (error) {
+        console.error("Error removing conflicting events:", error);
+    }
 };
