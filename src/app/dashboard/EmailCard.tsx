@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { TriangleAlert, AlertCircle, Mail } from "lucide-react";
+import { TriangleAlert, AlertCircle, Mail, Sparkles, Key } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -7,6 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClient } from "@supabase/supabase-js";
 import { useRouter } from 'next/navigation';
 import { EmailDetailsSheet } from "./EmailDetailsSheet";
+import { toast } from "sonner";
 
 
 // Updated Email type definition to include all fields from the JSON response
@@ -285,16 +286,64 @@ export default function EmailCard() {
 
   return (
     <Card>
-      <CardHeader className="flex justify-between items-center flex-col sm:flex-row">
-        <div className="mb-4 sm:mb-0">
-          <CardTitle className="text-lg font-semibold">Recent Emails</CardTitle>
-          <CardDescription>Your latest incoming messages</CardDescription>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle className="text-lg font-semibold">Emails</CardTitle>
+          <CardDescription>Your recent communications</CardDescription>
         </div>
-        {isAuthenticated && (
-          <Button onClick={handleLogout} variant="destructive">
+        <div className="flex gap-2">
+          {isAuthenticated && (
+            <>
+              <Button 
+                variant="outline" 
+                // size="sm" 
+                onClick={async () => {
+                  try {
+                    const { data: { session } } = await supabase.auth.getSession();
+                    const token = session?.access_token;
+                    
+                    toast.loading("Training AI with your emails...", {
+                      duration: 5000,
+                    });
+
+                    const response = await fetch('http://localhost:3000/api/train-email', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                      },
+                      body: JSON.stringify({
+                        user_id: userId,
+                        access_token: token,
+                      }),
+                    });
+
+                    if (response.ok) {
+                      toast.success("AI training started successfully!", {
+                        description: "This process may take a few minutes.",
+                        duration: 5000,
+                      });
+                    } else {
+                      throw new Error("Failed to start AI training");
+                    }
+                  } catch (error) {
+                    console.error("Error training AI:", error);
+                    toast.error("Failed to start AI training", {
+                      description: "Please try again later.",
+                      duration: 5000,
+                    });
+                  }
+                }}
+                className="flex items-center gap-2"
+              >
+                <Sparkles className="h-4 w-4" />
+                Train Email AI
+              </Button>
+              <Button onClick={handleLogout} variant="destructive">
             Logout
-          </Button>
-        )}
+            </Button>
+            </>
+          )}
+        </div>
       </CardHeader>
       <CardContent>
         <div className="relative">

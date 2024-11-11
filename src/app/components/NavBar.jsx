@@ -12,7 +12,7 @@ import { Circle } from "lucide-react"
 export default function NavBar() {
   return (
     <header className="border-b">
-      <nav className="mx-auto flex h-20 max-w-7xl items-center justify-between px-6">
+      <nav className="mx-auto flex h-20 max-w-7xl items-center justify-between px-6 pb-2">
         <Link href="/" className="flex items-center gap-2">
           {/* <Circle className="h-5 w-5 fill-[#FF5733] text-[#FF5733]" /> */}
           <Image src="/favicon.png" alt="ezl" width={32} height={32} />

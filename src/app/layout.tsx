@@ -10,6 +10,7 @@ import {
   UserButton
 } from '@clerk/nextjs'
 import NavBar from "@/app/components/NavBar"
+import { Toaster } from "sonner";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -45,6 +46,21 @@ export default function RootLayout({
           <body className="min-h-[100dvh] bg-gray-50">
             <NavBar />
             {children}
+            <Toaster 
+              position="bottom-right"
+              expand={true}
+              richColors
+              closeButton
+              toastOptions={{
+                style: {
+                  padding: '16px',
+                  paddingRight: '24px',
+                  minWidth: '400px',
+                  fontSize: '1rem',
+                },
+                duration: 5000,
+              }}
+            />
           </body>
         </html>
     </ClerkProvider>

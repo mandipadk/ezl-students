@@ -211,9 +211,9 @@ const checkAuthentication = async () => {
                         const freeTimeEventsArray = freeTimeEvents.data?.[0]?.json_response?.events || [];
                         
                         const hasBaseConflict = checkEventConflicts(assignmentEvent, baseEventsArray);
-                        const hasFreeTimeOverlap = checkEventConflicts(assignmentEvent, freeTimeEventsArray);
+                        // const hasFreeTimeOverlap = checkEventConflicts(assignmentEvent, freeTimeEventsArray);
                         
-                        return !hasBaseConflict && hasFreeTimeOverlap;
+                        return !hasBaseConflict; //&& hasFreeTimeOverlap;
                     })
                     .map((event: any) => ({
                         ...event,
@@ -760,7 +760,9 @@ const checkAuthentication = async () => {
     console.log("Starting AI prioritization");
     if (!userId) {
         console.log("No user ID found");
-        toast.error("Please log in to use AI prioritization");
+        toast.error("Please log in to use AI prioritization", {
+            duration: 3000,
+        });
         return;
     }
 
@@ -768,6 +770,7 @@ const checkAuthentication = async () => {
         setIsAIProcessing(true);
         toast.info("AI is analyzing your schedule. This may take up to 5 minutes.", {
             duration: 10000,
+            id: 'ai-processing',
         });
 
         const response = await fetch('http://localhost:7777/schedule', {
@@ -792,24 +795,19 @@ const checkAuthentication = async () => {
                     setIsAIProcessing(false);
                     await fetchCalenderEvents(userId);
                     toast.success("Schedule has been optimized by AI!", {
-                        description: "Your calendar has been updated with the new prioritized schedule."
+                        description: "Your calendar has been updated with the new prioritized schedule.",
+                        duration: 5000,
                     });
                 }
-            }, 10000); // Poll every 30 seconds
+            }, 10000);
 
             // Clear interval after 6 minutes (timeout)
             setTimeout(() => {
-                console.log("Timeout reached. Clearing interval.");
                 clearInterval(pollInterval);
-                console.log("Setting isAIProcessing to false");
                 setIsAIProcessing(false);
-                toast.error("AI prioritization is taking longer than expected. Please try again.");
-                // if (isAIProcessing) {
-                //     console.log("Setting isAIProcessing to false");
-                //     setIsAIProcessing(false);
-                //     toast.error("AI prioritization is taking longer than expected. Please try again.");
-                // }
-
+                toast.error("AI prioritization is taking longer than expected. Please try again.", {
+                    duration: 5000,
+                });
             }, 60000);
 
         } else {
@@ -818,7 +816,9 @@ const checkAuthentication = async () => {
     } catch (error) {
         console.error("Error in AI prioritization:", error);
         setIsAIProcessing(false);
-        toast.error("Failed to prioritize schedule. Please try again.");
+        toast.error("Failed to prioritize schedule. Please try again.", {
+            duration: 5000,
+        });
     }
 };
 
