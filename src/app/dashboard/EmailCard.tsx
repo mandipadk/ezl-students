@@ -49,7 +49,7 @@ export default function EmailCard() {
   const router = useRouter();
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
-
+  const [provider_token, setProviderToken] = useState<string | null>(null);
 
   useEffect(() => {
     checkAuthentication();
@@ -69,6 +69,7 @@ export default function EmailCard() {
     const refreshToken = url.searchParams.get("refresh_token");
     const provider_token = url.searchParams.get("provider_token");
     const provider_refresh_token = url.searchParams.get("provider_refresh_token");
+    setProviderToken(provider_token);
 
     if ((accessToken && refreshToken) || (provider_token && provider_refresh_token)) {
       supabase.auth.setSession({
@@ -299,12 +300,21 @@ export default function EmailCard() {
                 // size="sm" 
                 onClick={async () => {
                   try {
-                    const { data: { session } } = await supabase.auth.getSession();
-                    const token = session?.access_token;
+                    const token = provider_token;
+
+                    if (!token) {
+                      throw new Error("No access token found");
+                    }
                     
-                    toast.loading("Training AI with your emails...", {
-                      duration: 5000,
-                    });
+                    toast(
+                      <div className="flex items-center gap-2">
+                        <svg className="animate-spin h-5 w-5 text-black" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                        </svg>
+                        Training AI with your emails...
+                      </div>
+                    );
 
                     const response = await fetch('https://d8wpi37yt3.execute-api.us-east-1.amazonaws.com/create_vector_store', {
                       method: 'POST',
@@ -317,20 +327,23 @@ export default function EmailCard() {
                       }),
                     });
 
-                    if (response.ok) {
-                      toast.success("AI training started successfully!", {
-                        description: "This process may take a few minutes.",
-                        duration: 5000,
-                      });
-                    } else {
-                      throw new Error("Failed to start AI training");
+                    if (!response.ok) {
+                      const errorData = await response.json();
+                      throw new Error(errorData.message || "Failed to start AI training");
                     }
-                  } catch (error) {
-                    console.error("Error training AI:", error);
-                    toast.error("Failed to start AI training", {
-                      description: "Please try again later.",
+
+                    toast.success("AI training started successfully!", {
+                      description: "This process may take a few minutes.",
                       duration: 5000,
                     });
+                  } catch (error) {
+                    if (error instanceof Error) {
+                      console.error("Error training AI:", error);
+                      toast.error("Failed to start AI training", {
+                        description: error.message || "Please try again later.",
+                        duration: 5000,
+                      });
+                    }
                   }
                 }}
                 className="flex items-center gap-2"

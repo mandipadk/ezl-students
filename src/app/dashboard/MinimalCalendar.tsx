@@ -1483,7 +1483,7 @@ const parseRecurrenceRule = (rrule: string): RecurrenceRule | undefined => {
             console.error("Error parsing UNTIL date:", error);
         }
     }
-    if (parts.COUNT) rule.count = parseInt(parts.COUNT);
+    if (parts.COUNT) rule.count = parseInt(parts.COUNT); 
     if (parts.BYDAY) rule.byDay = parts.BYDAY.split(',');
     if (parts.BYMONTH) rule.byMonth = parts.BYMONTH.split(',').map(Number);
     if (parts.BYMONTHDAY) rule.byMonthDay = parseInt(parts.BYMONTHDAY);
