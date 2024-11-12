@@ -448,7 +448,7 @@ export default function AssignmentCard() {
                         <Tooltip>
                             <TooltipTrigger asChild>
                                 <Button 
-                                    variant="outline" 
+                                    variant="secondary" 
                                     size="sm" 
                                     onClick={() => setShowTokenInput(true)}
                                     className="flex items-center gap-2"

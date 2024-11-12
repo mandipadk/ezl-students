@@ -181,8 +181,8 @@ const checkAuthentication = async () => {
             if (baseEvents.data && baseEvents.data.length > 0 && baseEvents.data[0].json_response?.events) {
                 const events = baseEvents.data[0].json_response.events.map((event: any) => ({
                     ...event,
-                    startDate: new Date(event.startDate),
-                    endDate: new Date(event.endDate),
+                    startDate: new Date(new Date(event.startDate).toUTCString()),
+                    endDate: new Date(new Date(event.endDate).toUTCString()),
                     source: 'base' as EventSource
                 }));
                 allEvents = [...allEvents, ...events];
@@ -195,8 +195,8 @@ const checkAuthentication = async () => {
                     .filter((freeEvent: Event) => !checkEventConflicts(freeEvent, allEvents))
                     .map((event: any) => ({
                         ...event,
-                        startDate: new Date(event.startDate),
-                        endDate: new Date(event.endDate),
+                        startDate: new Date(new Date(event.startDate).toUTCString()),
+                        endDate: new Date(new Date(event.endDate).toUTCString()),
                         source: 'free' as EventSource
                     }));
                 allEvents = [...allEvents, ...freeEvents];
@@ -217,8 +217,8 @@ const checkAuthentication = async () => {
                     })
                     .map((event: any) => ({
                         ...event,
-                        startDate: new Date(event.startDate),
-                        endDate: new Date(event.endDate),
+                        startDate: new Date(new Date(event.startDate).toUTCString()),
+                        endDate: new Date(new Date(event.endDate).toUTCString()),
                         source: 'assignment' as EventSource
                     }));
                 allEvents = [...allEvents, ...assignmentEvts];

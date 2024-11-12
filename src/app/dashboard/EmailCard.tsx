@@ -295,7 +295,7 @@ export default function EmailCard() {
           {isAuthenticated && (
             <>
               <Button 
-                variant="outline" 
+                variant="secondary" 
                 // size="sm" 
                 onClick={async () => {
                   try {
@@ -338,9 +338,9 @@ export default function EmailCard() {
                 <Sparkles className="h-4 w-4" />
                 Train Email AI
               </Button>
-              <Button onClick={handleLogout} variant="destructive">
+              {/* <Button onClick={handleLogout} variant="destructive">
             Logout
-            </Button>
+            </Button> */}
             </>
           )}
         </div>
