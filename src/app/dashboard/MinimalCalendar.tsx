@@ -333,17 +333,32 @@ const checkAuthentication = async () => {
         if (event.source === 'base') {
             if (freeTimeConflicts.length > 0 || assignmentConflicts.length > 0) {
                 const confirmOverride = window.confirm(
-                    `This will override ${freeTimeConflicts.length} free time period(s) and ${assignmentConflicts.length} assignment(s). Do you want to continue?`
+                    `This will affect ${freeTimeConflicts.length} free time period(s) and ${assignmentConflicts.length} assignment(s). Do you want to continue?`
                 );
                 
                 if (!confirmOverride) {
                     return;
                 }
                 
-                // Remove conflicting free time and assignment events
+                // Adjust overlapping free time events
                 if (freeTimeConflicts.length > 0) {
-                    await removeConflictingEventsFromTable('FreeTimeCal', userId, freeTimeConflicts);
+                    const adjustedFreeTimeEvents = freeTimeEvents.flatMap((freeEvent: Event) => {
+                        if (freeTimeConflicts.some(conflict => conflict.id === freeEvent.id)) {
+                            return adjustOverlappingEvent(freeEvent, event);
+                        }
+                        return [freeEvent];
+                    });
+
+                    // Update free time events in database
+                    await supabase
+                        .from('FreeTimeCal')
+                        .update({
+                            json_response: { events: adjustedFreeTimeEvents }
+                        })
+                        .eq('user_id', userId);
                 }
+
+                // Remove conflicting assignment events
                 if (assignmentConflicts.length > 0) {
                     await removeConflictingEventsFromTable('AssignmentCal', userId, assignmentConflicts);
                 }
@@ -1577,7 +1592,6 @@ const parseDateTime = (dateTimeStr: string): Date => {
     }
 };
 
-// Add this helper function to check for conflicts between two sets of events
 const findConflictingEvents = (newEvents: Event[], existingEvents: Event[]): Event[] => {
     return existingEvents.filter(existingEvent => 
         newEvents.some(newEvent => 
@@ -1589,4 +1603,47 @@ const findConflictingEvents = (newEvents: Event[], existingEvents: Event[]): Eve
             )
         )
     );
+};
+
+// Add this helper function to split or adjust events
+const adjustOverlappingEvent = (existingEvent: Event, newEvent: Event): Event[] => {
+    const existingStart = new Date(existingEvent.startDate);
+    const existingEnd = new Date(existingEvent.endDate);
+    const newStart = new Date(newEvent.startDate);
+    const newEnd = new Date(newEvent.endDate);
+    const adjustedEvents: Event[] = [];
+
+    // If new event splits the existing event into two parts
+    if (newStart > existingStart && newEnd < existingEnd) {
+        // Create first part (before new event)
+        adjustedEvents.push({
+            ...existingEvent,
+            id: `${existingEvent.id}-1`,
+            endDate: newStart
+        });
+        
+        // Create second part (after new event)
+        adjustedEvents.push({
+            ...existingEvent,
+            id: `${existingEvent.id}-2`,
+            startDate: newEnd
+        });
+    }
+    // If new event overlaps only the start
+    else if (newStart <= existingStart && newEnd < existingEnd) {
+        adjustedEvents.push({
+            ...existingEvent,
+            startDate: newEnd
+        });
+    }
+    // If new event overlaps only the end
+    else if (newStart > existingStart && newEnd >= existingEnd) {
+        adjustedEvents.push({
+            ...existingEvent,
+            endDate: newStart
+        });
+    }
+    // If new event completely covers existing event, return empty array
+    
+    return adjustedEvents;
 };
