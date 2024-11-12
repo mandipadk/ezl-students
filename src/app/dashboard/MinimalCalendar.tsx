@@ -39,7 +39,7 @@ type RecurrenceRule = {
 
 const EVENT_COLORS = {
   base: {
-    bg: "bg-blue-100",
+    bg: "bg-blue-200",
     text: "text-blue-800",
     hover: "hover:bg-blue-200",
     dot: "bg-blue-500"
