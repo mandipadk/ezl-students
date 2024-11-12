@@ -306,7 +306,7 @@ export default function EmailCard() {
                       duration: 5000,
                     });
 
-                    const response = await fetch('https://3l6yeav6bb.execute-api.us-east-1.amazonaws.com/create_vector_store', {
+                    const response = await fetch('https://d8wpi37yt3.execute-api.us-east-1.amazonaws.com/create_vector_store', {
                       method: 'POST',
                       headers: {
                         'Content-Type': 'application/json',
