@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState, useEffect } from 'react'
-import { addDays, startOfMonth, endOfMonth, eachDayOfInterval, format, isSameDay, isSameMonth, startOfWeek, endOfWeek, addWeeks, setHours, setMinutes, isSameWeek, parseISO, isWithinInterval } from 'date-fns'
+import { addDays, startOfMonth, endOfMonth, eachDayOfInterval, format, isSameDay, isSameMonth, startOfWeek, endOfWeek, addWeeks, setHours, setMinutes, isSameWeek, parseISO, isWithinInterval, addMonths, addYears } from 'date-fns'
 import { CalendarIcon, ChevronLeft, ChevronRight, Plus, Upload, Sparkles } from 'lucide-react'
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from "@/components/ui/dialog"
@@ -21,6 +21,20 @@ type Event = {
   description: string;
   source: EventSource;
   color?: string;
+  recurrence?: RecurrenceRule;
+  parentEventId?: string;
+};
+
+type RecurrenceFrequency = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
+
+type RecurrenceRule = {
+    frequency: RecurrenceFrequency;
+    interval?: number;
+    until?: Date;
+    count?: number;
+    byDay?: string[];
+    byMonth?: number[];
+    byMonthDay?: number;
 };
 
 const EVENT_COLORS = {
@@ -269,70 +283,141 @@ const checkAuthentication = async () => {
 
   // Update handleAddEvent to use fetchCalenderEvents instead of fetchAllEvents
   const handleAddEvent = async () => {
+    if (!userId) {
+        toast.error("Please log in to create events");
+        return;
+    }
+
+    if (!newEvent.title || !newEvent.startDate || !newEvent.endDate) {
+        toast.error("Please fill in all required fields");
+        return;
+    }
+
     const event: Event = { 
         ...newEvent, 
         id: Date.now().toString()
     };
     
     try {
-        if (userId) {
-            // Validate event placement
-            const validation = await validateEventPlacement(userId, event);
-            if (!validation.valid) {
-                alert(validation.message);
+        // 1. First check for base event conflicts
+        const { data: baseEventsData } = await supabase
+            .from('BaseCalendarEvents')
+            .select('json_response')
+            .eq('user_id', userId)
+            .single();
+
+        const baseEvents = baseEventsData?.json_response?.events || [];
+        const baseConflicts = checkSpecificEventConflicts(event, baseEvents, 'base');
+
+        // 2. Check for free time conflicts
+        const { data: freeTimeData } = await supabase
+            .from('FreeTimeCal')
+            .select('json_response')
+            .eq('user_id', userId)
+            .single();
+
+        const freeTimeEvents = freeTimeData?.json_response?.events || [];
+        const freeTimeConflicts = checkSpecificEventConflicts(event, freeTimeEvents, 'free');
+
+        // 3. Check for assignment conflicts
+        const { data: assignmentData } = await supabase
+            .from('AssignmentCal')
+            .select('json_response')
+            .eq('user_id', userId)
+            .single();
+
+        const assignmentEvents = assignmentData?.json_response?.events || [];
+        const assignmentConflicts = checkSpecificEventConflicts(event, assignmentEvents, 'assignment');
+
+        // Handle different scenarios based on event type
+        if (event.source === 'base') {
+            if (freeTimeConflicts.length > 0 || assignmentConflicts.length > 0) {
+                const confirmOverride = window.confirm(
+                    `This will override ${freeTimeConflicts.length} free time period(s) and ${assignmentConflicts.length} assignment(s). Do you want to continue?`
+                );
+                
+                if (!confirmOverride) {
+                    return;
+                }
+                
+                // Remove conflicting free time and assignment events
+                if (freeTimeConflicts.length > 0) {
+                    await removeConflictingEventsFromTable('FreeTimeCal', userId, freeTimeConflicts);
+                }
+                if (assignmentConflicts.length > 0) {
+                    await removeConflictingEventsFromTable('AssignmentCal', userId, assignmentConflicts);
+                }
+            }
+        } else if (event.source === 'free') {
+            if (baseConflicts.length > 0) {
+                toast.error("Cannot create free time during base events");
                 return;
             }
-
-            // Get existing events of the same type
-            const { data: existingData } = await supabase
-                .from(event.source === 'base' ? 'BaseCalendarEvents' : 
-                      event.source === 'free' ? 'FreeTimeCal' : 'AssignmentCal')
-                .select('json_response')
-                .eq('user_id', userId)
-                .single();
-
-            let allEvents: Event[] = [];
-            if (existingData?.json_response?.events) {
-                allEvents = [...existingData.json_response.events] as Event[];
+        } else if (event.source === 'assignment') {
+            if (baseConflicts.length > 0) {
+                toast.error("Cannot create assignment during base events");
+                return;
             }
-
-            // Add the new event
-            allEvents.push(event);
-
-            // If it's a base event, remove any conflicting free time or assignment events
-            if (event.source === 'base') {
-                await removeConflictingEvents(userId, event);
-            }
-
-            // Update the database
-            const { error: insertError } = await supabase
-                .from(event.source === 'base' ? 'BaseCalendarEvents' : 
-                      event.source === 'free' ? 'FreeTimeCal' : 'AssignmentCal')
-                .upsert({
-                    user_id: userId,
-                    json_response: {
-                        events: allEvents
-                    }
-                }, {
-                    onConflict: 'user_id'
-                });
-
-            if (insertError) {
-                console.error("Error saving event:", insertError.message);
-            } else {
-                // Refresh all events using the existing function
-                await fetchCalenderEvents(userId);
-                setNewEvent({
-                    title: '',
-                    startDate: new Date(),
-                    endDate: new Date(),
-                    description: '',
-                    source: 'base'
-                });
+            if (freeTimeConflicts.length === 0) {
+                toast.error("Assignments must be scheduled during free time periods");
+                return;
             }
         }
+
+        // Add the new event to the appropriate table
+        const tableName = event.source === 'base' ? 'BaseCalendarEvents' : 
+                         event.source === 'free' ? 'FreeTimeCal' : 'AssignmentCal';
+
+        // First, try to get existing record
+        const { data: existingRecord } = await supabase
+            .from(tableName)
+            .select('*')
+            .eq('user_id', userId)
+            .single();
+
+        if (existingRecord) {
+            // If record exists, update it
+            const { error: updateError } = await supabase
+                .from(tableName)
+                .update({
+                    json_response: {
+                        events: [...(existingRecord.json_response?.events || []), event]
+                    }
+                })
+                .eq('user_id', userId);
+
+            if (updateError) throw updateError;
+        } else {
+            // If no record exists, insert new one
+            const { error: insertError } = await supabase
+                .from(tableName)
+                .insert({
+                    user_id: userId,
+                    json_response: {
+                        events: [event]
+                    }
+                });
+
+            if (insertError) throw insertError;
+        }
+
+        // Refresh the calendar
+        await fetchCalenderEvents(userId);
+        
+        // Reset the new event form
+        setNewEvent({
+            title: '',
+            startDate: new Date(),
+            endDate: new Date(),
+            description: '',
+            source: 'base'
+        });
+
+        toast.success("Event created successfully!");
+
     } catch (error) {
-        console.error("Error saving event:", error);
+        console.error("Error creating event:", error);
+        toast.error("Failed to create event. Please try again.");
     }
 };
 
@@ -340,6 +425,11 @@ const checkAuthentication = async () => {
     try {
         console.log("Starting file import process...");
         
+        if (!userId) {
+            toast.error("Please log in to import events");
+            return;
+        }
+
         // 1. Read the file
         const text = await file.text();
         console.log("File read successfully");
@@ -349,7 +439,7 @@ const checkAuthentication = async () => {
         console.log("Parsed events:", parsedEvents);
 
         if (!parsedEvents.length) {
-            console.error("No events were parsed from the file");
+            toast.error("No events were found in the file");
             return;
         }
 
@@ -360,19 +450,82 @@ const checkAuthentication = async () => {
         }));
         console.log("Prepared events for saving:", newEvents);
 
-        // 4. Save to Supabase
-        await saveBaseEventsToSupabase(newEvents);
+        // 4. Check for conflicts with existing events
+        try {
+            // Get existing events from all tables
+            const [baseEvents, freeTimeEvents, assignmentEvents] = await Promise.all([
+                supabase
+                    .from('BaseCalendarEvents')
+                    .select('json_response')
+                    .eq('user_id', userId)
+                    .single(),
+                supabase
+                    .from('FreeTimeCal')
+                    .select('json_response')
+                    .eq('user_id', userId)
+                    .single(),
+                supabase
+                    .from('AssignmentCal')
+                    .select('json_response')
+                    .eq('user_id', userId)
+                    .single()
+            ]);
 
-        // 5. Update local state only after successful save
-        setEvents(prevEvents => {
-            const updatedEvents = [...prevEvents, ...newEvents];
-            console.log("Updated local state with new events:", updatedEvents);
-            return updatedEvents;
-        });
+            const existingEvents = [
+                ...(baseEvents.data?.json_response?.events || []),
+                ...(freeTimeEvents.data?.json_response?.events || []),
+                ...(assignmentEvents.data?.json_response?.events || [])
+            ];
+
+            const conflictingEvents = findConflictingEvents(newEvents, existingEvents);
+
+            if (conflictingEvents.length > 0) {
+                // Create a promise that resolves with the user's choice
+                const userChoice = await new Promise<boolean>((resolve) => {
+                    const confirmDialog = window.confirm(
+                        `This import will overwrite ${conflictingEvents.length} existing event(s). ` +
+                        `Do you want to continue?`
+                    );
+                    resolve(confirmDialog);
+                });
+
+                if (!userChoice) {
+                    toast.info("Import cancelled");
+                    return;
+                }
+
+                // If user confirms, remove conflicting events from their respective tables
+                const baseConflicts = conflictingEvents.filter(e => e.source === 'base');
+                const freeTimeConflicts = conflictingEvents.filter(e => e.source === 'free');
+                const assignmentConflicts = conflictingEvents.filter(e => e.source === 'assignment');
+
+                await Promise.all([
+                    baseConflicts.length > 0 && removeConflictingEventsFromTable('BaseCalendarEvents', userId, baseConflicts),
+                    freeTimeConflicts.length > 0 && removeConflictingEventsFromTable('FreeTimeCal', userId, freeTimeConflicts),
+                    assignmentConflicts.length > 0 && removeConflictingEventsFromTable('AssignmentCal', userId, assignmentConflicts)
+                ]);
+            }
+
+            // 5. Save the new events
+            await saveBaseEventsToSupabase(newEvents);
+            
+            // 6. Refresh the calendar
+            await fetchCalenderEvents(userId);
+            
+            toast.success(
+                `Successfully imported ${newEvents.length} events` + 
+                (conflictingEvents?.length ? ` and removed ${conflictingEvents.length} conflicting events` : '')
+            );
+
+        } catch (error) {
+            console.error("Error handling conflicts:", error);
+            toast.error("Failed to handle conflicts during import");
+            return;
+        }
 
     } catch (error) {
         console.error("Error in handleImportEvents:", error);
-        alert("Failed to import events. Please try again.");
+        toast.error("Failed to import events. Please try again.");
     }
 };
 
@@ -385,58 +538,55 @@ const checkAuthentication = async () => {
     try {
         console.log("Starting saveBaseEventsToSupabase...");
         
-        // 1. Fetch existing base events
-        const { data: existingBaseData, error: baseError } = await supabase
+        // First, get existing events
+        const { data: existingData, error: fetchError } = await supabase
             .from('BaseCalendarEvents')
             .select('*')
             .eq('user_id', userId)
             .single();
 
-        if (baseError && baseError.code !== 'PGRST116') {
-            console.error("Error fetching base events:", baseError);
-            throw new Error(`Failed to fetch base events: ${baseError.message}`);
+        if (fetchError && fetchError.code !== 'PGRST116') {
+            throw fetchError;
         }
 
-        // 2. Combine existing and new events
-        let allBaseEvents: Event[] = [];
-        if (existingBaseData?.json_response?.events) {
-            allBaseEvents = [...existingBaseData.json_response.events];
-            console.log("Existing base events:", allBaseEvents);
-        }
-        
-        allBaseEvents = [...allBaseEvents, ...newEvents];
-        console.log("Combined events:", allBaseEvents);
+        // Process recurring events
+        const processedEvents = newEvents.flatMap(event => {
+            if (event.recurrence) {
+                const until = addMonths(new Date(), 6);
+                return generateRecurringEvents(event, event.recurrence, until);
+            }
+            return [event];
+        });
 
-        // 3. Delete existing record if it exists
-        if (existingBaseData) {
-            const { error: deleteError } = await supabase
+        // Combine existing non-conflicting events with new events
+        let allEvents = [
+            ...(existingData?.json_response?.events || []),
+            ...processedEvents
+        ];
+
+        // Update or insert the events
+        if (existingData) {
+            const { error: updateError } = await supabase
                 .from('BaseCalendarEvents')
-                .delete()
+                .update({
+                    json_response: { events: allEvents }
+                })
                 .eq('user_id', userId);
 
-            if (deleteError) {
-                console.error("Error deleting existing events:", deleteError);
-                throw new Error(`Failed to delete existing events: ${deleteError.message}`);
-            }
-        }
+            if (updateError) throw updateError;
+        } else {
+            const { error: insertError } = await supabase
+                .from('BaseCalendarEvents')
+                .insert({
+                    user_id: userId,
+                    json_response: { events: allEvents }
+                });
 
-        // 4. Insert new record
-        const { error: insertError } = await supabase
-            .from('BaseCalendarEvents')
-            .insert({
-                user_id: userId,
-                json_response: {
-                    events: allBaseEvents
-                }
-            });
-
-        if (insertError) {
-            console.error("Error inserting base events:", insertError);
-            throw new Error(`Failed to insert base events: ${insertError.message}`);
+            if (insertError) throw insertError;
         }
 
         console.log("Successfully saved all events to Supabase");
-        return { allBaseEvents };
+        return { allEvents };
 
     } catch (error) {
         console.error("Error in saveBaseEventsToSupabase:", error);
@@ -445,42 +595,53 @@ const checkAuthentication = async () => {
 };
 
   const parseICS = (icsText: string): Omit<Event, 'id'>[] => {
+    console.log("Starting ICS parsing...");
     const events: Omit<Event, 'id'>[] = [];
     const lines = icsText.split('\n');
     let currentEvent: Partial<Omit<Event, 'id'>> = {};
+    let rrule: string | undefined;
 
-    const parseDateTime = (dateTimeStr: string): Date => {
-        // Remove any TZID if present
-        const cleanStr = dateTimeStr.includes(':') ? dateTimeStr.split(':').pop()! : dateTimeStr;
-        
-        // Parse the date string
-        const year = parseInt(cleanStr.substr(0, 4));
-        const month = parseInt(cleanStr.substr(4, 2)) - 1; // months are 0-based
-        const day = parseInt(cleanStr.substr(6, 2));
-        const hour = parseInt(cleanStr.substr(9, 2));
-        const minute = parseInt(cleanStr.substr(11, 2));
-        const second = parseInt(cleanStr.substr(13, 2));
+    console.log("Total lines in ICS file:", lines.length);
 
-        return new Date(year, month, day, hour, minute, second);
-    };
-
-    lines.forEach(line => {
+    lines.forEach((line, index) => {
         const cleanLine = line.trim();
         
         if (cleanLine.startsWith('BEGIN:VEVENT')) {
+            console.log(`Found event at line ${index}`);
             currentEvent = { source: 'base' as EventSource };
+            rrule = undefined;
         } else if (cleanLine.startsWith('END:VEVENT')) {
             if (currentEvent.title && currentEvent.startDate && currentEvent.endDate) {
-                events.push({
+                console.log("Processing event:", {
+                    title: currentEvent.title,
+                    startDate: currentEvent.startDate,
+                    endDate: currentEvent.endDate,
+                    rrule
+                });
+
+                const baseEvent = {
                     ...currentEvent,
                     source: 'base' as EventSource,
                     description: currentEvent.description || '',
                     title: currentEvent.title,
                     startDate: currentEvent.startDate,
-                    endDate: currentEvent.endDate
-                } as Omit<Event, 'id'>);
+                    endDate: currentEvent.endDate,
+                } as Omit<Event, 'id'>;
+
+                if (rrule) {
+                    console.log("Found RRULE:", rrule);
+                    const recurrenceRule = parseRecurrenceRule(rrule);
+                    if (recurrenceRule) {
+                        console.log("Parsed recurrence rule:", recurrenceRule);
+                        baseEvent.recurrence = recurrenceRule;
+                    }
+                }
+                events.push(baseEvent);
             }
             currentEvent = { source: 'base' as EventSource };
+        } else if (cleanLine.startsWith('RRULE:')) {
+            rrule = cleanLine.replace('RRULE:', '');
+            console.log("Found RRULE:", rrule);
         } else if (cleanLine.startsWith('SUMMARY:')) {
             currentEvent.title = cleanLine.replace('SUMMARY:', '').trim();
         } else if (cleanLine.startsWith('DESCRIPTION:')) {
@@ -488,19 +649,21 @@ const checkAuthentication = async () => {
         } else if (cleanLine.startsWith('DTSTART')) {
             try {
                 currentEvent.startDate = parseDateTime(cleanLine.split(':').pop()!);
+                console.log("Parsed start date:", currentEvent.startDate);
             } catch (error) {
                 console.error('Error parsing start date:', error, cleanLine);
             }
         } else if (cleanLine.startsWith('DTEND')) {
             try {
                 currentEvent.endDate = parseDateTime(cleanLine.split(':').pop()!);
+                console.log("Parsed end date:", currentEvent.endDate);
             } catch (error) {
                 console.error('Error parsing end date:', error, cleanLine);
             }
         }
     });
 
-    console.log("Parsed events:", events);
+    console.log("Finished parsing. Total events found:", events.length);
     return events;
 };
 
@@ -529,10 +692,17 @@ const checkAuthentication = async () => {
           </div>
         ))}
         {allDays.map((day, index) => {
-          const dayEvents = events.filter(event => 
-            isSameDay(event.startDate, day) || 
-            isWithinInterval(day, { start: event.startDate, end: event.endDate })
-          );
+          // Sort events by type to ensure proper rendering order
+          const dayEvents = events
+            .filter(event => 
+              isSameDay(event.startDate, day) || 
+              isWithinInterval(day, { start: event.startDate, end: event.endDate })
+            )
+            .sort((a, b) => {
+              // Sort by event type (base > assignment > free)
+              const typeOrder = { base: 3, assignment: 2, free: 1 };
+              return typeOrder[b.source] - typeOrder[a.source];
+            });
           
           const isToday = isSameDay(day, new Date());
           const isCurrentMonth = isSameMonth(day, currentDate);
@@ -576,11 +746,17 @@ const checkAuthentication = async () => {
   }
 
   // Add a helper function to calculate event height and position
+  const getUTCHour = (date: Date) => {
+    return new Date(date).getUTCHours();
+  };
+
   const calculateEventStyles = (event: Event, hour: number) => {
     const eventStart = new Date(event.startDate);
     const eventEnd = new Date(event.endDate);
-    const startHour = eventStart.getHours() + eventStart.getMinutes() / 60;
-    const endHour = eventEnd.getHours() + eventEnd.getMinutes() / 60;
+    
+    // Use UTC hours
+    const startHour = getUTCHour(eventStart) + eventStart.getUTCMinutes() / 60;
+    const endHour = getUTCHour(eventEnd) + eventEnd.getUTCMinutes() / 60;
     
     // Only render if this is the starting hour of the event
     if (hour !== Math.floor(startHour)) return null;
@@ -589,13 +765,17 @@ const checkAuthentication = async () => {
     const topOffset = (startHour - Math.floor(startHour)) * 100; // % from top of hour
     const height = duration * 100; // height in pixels (1 hour = 100px)
     
+    // Assign z-index based on event type
+    const zIndex = event.source === 'base' ? 30 : 
+                  event.source === 'assignment' ? 20 : 10;
+    
     return {
-      top: `${topOffset}%`,
-      height: `${height}%`,
-      position: 'absolute' as const,
-      left: '4px',
-      right: '4px',
-      zIndex: 10,
+        top: `${topOffset}%`,
+        height: `${height}%`,
+        position: 'absolute' as const,
+        left: '4px',
+        right: '4px',
+        zIndex,
     };
   };
 
@@ -638,14 +818,24 @@ const checkAuthentication = async () => {
                         {weekDays.map(day => {
                             const isToday = isSameDay(day, today);
                             const cellDate = setHours(day, hour);
-                            const cellEvents = events.filter(event => {
-                                const eventStart = new Date(event.startDate);
-                                const eventEnd = new Date(event.endDate);
-                                return isWithinInterval(cellDate, { 
-                                    start: setMinutes(eventStart, 0), 
-                                    end: setMinutes(eventEnd, 59) 
+                            // Sort events by type to ensure proper rendering order
+                            const cellEvents = events
+                                .filter(event => {
+                                    const eventStart = new Date(event.startDate);
+                                    const eventEnd = new Date(event.endDate);
+                                    const cellDateUTC = new Date(cellDate);
+                                    cellDateUTC.setUTCHours(hour);
+                                    cellDateUTC.setUTCMinutes(0);
+                                    return isWithinInterval(cellDateUTC, { 
+                                        start: eventStart,
+                                        end: eventEnd
+                                    });
+                                })
+                                .sort((a, b) => {
+                                    // Sort by event type (base > assignment > free)
+                                    const typeOrder = { base: 3, assignment: 2, free: 1 };
+                                    return typeOrder[b.source] - typeOrder[a.source];
                                 });
-                            });
 
                             return (
                                 <div 
@@ -669,7 +859,7 @@ const checkAuthentication = async () => {
                                             >
                                                 <p className="text-sm font-semibold truncate">{event.title}</p>
                                                 <p className="text-xs truncate">
-                                                    {format(new Date(event.startDate), 'h:mm a')} - {format(new Date(event.endDate), 'h:mm a')}
+                                                    {new Date(event.startDate).toISOString().slice(11, 16)} - {new Date(event.endDate).toISOString().slice(11, 16)}
                                                 </p>
                                             </div>
                                         );
@@ -693,9 +883,18 @@ const checkAuthentication = async () => {
             const cellEvents = events.filter(event => {
               const eventStart = new Date(event.startDate);
               const eventEnd = new Date(event.endDate);
-              return isWithinInterval(cellDate, { 
-                start: setMinutes(eventStart, 0), 
-                end: setMinutes(eventEnd, 59) 
+              const cellDateUTC = new Date(cellDate);
+              
+              // Set the hour in UTC
+              cellDateUTC.setUTCHours(hour);
+              cellDateUTC.setUTCMinutes(0);
+              
+              const startTime = new Date(eventStart);
+              const endTime = new Date(eventEnd);
+              
+              return isWithinInterval(cellDateUTC, { 
+                  start: startTime,
+                  end: endTime
               });
             });
 
@@ -719,7 +918,7 @@ const checkAuthentication = async () => {
                       >
                         <p className="text-sm font-semibold">{event.title}</p>
                         <p className="text-xs">
-                          {format(new Date(event.startDate), 'h:mm a')} - {format(new Date(event.endDate), 'h:mm a')}
+                          {new Date(event.startDate).toISOString().slice(11, 16)} - {new Date(event.endDate).toISOString().slice(11, 16)}
                         </p>
                       </div>
                     );
@@ -742,15 +941,20 @@ const checkAuthentication = async () => {
     const eventId = typeof event.id === 'number' ? `event-${event.id}` : event.id;
     const startDate = new Date(event.startDate);
     
+    // Assign z-index based on event type
+    const zIndex = source === 'base' ? 30 : 
+                  source === 'assignment' ? 20 : 10;
+    
     return (
         <div 
             key={`${eventId}-${dayString}-${startDate.toISOString()}`}
             className={`flex items-center gap-1 px-2 py-1 rounded-md mb-1 ${colors.bg} ${colors.text} hover:opacity-90 cursor-pointer transition-opacity`}
             onClick={() => setSelectedEvent(event)}
+            style={{ position: 'relative', zIndex }}
         >
             <span className={`w-2 h-2 rounded-full ${colors.dot} flex-shrink-0`}></span>
             <span className="truncate text-sm font-medium">
-                {format(startDate, 'HH:mm')} {event.title}
+                {startDate.toISOString().slice(11, 16)} {event.title}
             </span>
         </div>
     );
@@ -805,7 +1009,7 @@ const checkAuthentication = async () => {
             setTimeout(() => {
                 clearInterval(pollInterval);
                 setIsAIProcessing(false);
-                toast.error("AI prioritization is taking longer than expected. Please try again.", {
+                toast.error("AI prioritization is taking longer than expected. Please check back in few minutes.", {
                     duration: 5000,
                 });
             }, 60000);
@@ -929,8 +1133,46 @@ function EventButton({ event, setSelectedEvent }: {
 }
 
 function AddEventDialog({ newEvent, setNewEvent, handleAddEvent }: AddEventDialogProps) {
+    const [open, setOpen] = useState(false);
+
+    const handleSubmit = async () => {
+        await handleAddEvent();
+        setOpen(false);
+    };
+
+    // Convert Date to UTC datetime-local string format without timezone adjustment
+    const dateToUTCString = (date: Date) => {
+        return date.toISOString().slice(0, 16);
+    };
+
+    // Convert datetime-local string to UTC Date without timezone adjustment
+    const handleDateChange = (dateString: string, field: 'startDate' | 'endDate') => {
+        const date = new Date(dateString + 'Z');
+        setNewEvent(prev => ({ ...prev, [field]: date }));
+    };
+
+    // Initialize with UTC dates when opening the dialog
+    useEffect(() => {
+        if (open) {
+            const now = new Date();
+            const utcNow = new Date(Date.UTC(
+                now.getUTCFullYear(),
+                now.getUTCMonth(),
+                now.getUTCDate(),
+                now.getUTCHours(),
+                now.getUTCMinutes()
+            ));
+            
+            setNewEvent(prev => ({
+                ...prev,
+                startDate: utcNow,
+                endDate: new Date(utcNow.getTime() + 60 * 60 * 1000) // 1 hour later
+            }));
+        }
+    }, [open]);
+
     return (
-        <Dialog>
+        <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
                 <Button size="sm">
                     <Plus className="mr-2 h-4 w-4" /> Create
@@ -938,7 +1180,10 @@ function AddEventDialog({ newEvent, setNewEvent, handleAddEvent }: AddEventDialo
             </DialogTrigger>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>Add New Event</DialogTitle>
+                    <DialogTitle>Add New Event (UTC)</DialogTitle>
+                    <DialogDescription>
+                        All times are in UTC timezone
+                    </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-4 py-4">
                     <div className="grid gap-2">
@@ -947,6 +1192,7 @@ function AddEventDialog({ newEvent, setNewEvent, handleAddEvent }: AddEventDialo
                             id="title"
                             value={newEvent.title}
                             onChange={(e) => setNewEvent({ ...newEvent, title: e.target.value })}
+                            required
                         />
                     </div>
                     
@@ -958,31 +1204,41 @@ function AddEventDialog({ newEvent, setNewEvent, handleAddEvent }: AddEventDialo
                             value={newEvent.source}
                             onChange={(e) => setNewEvent({ 
                                 ...newEvent, 
-                                source: e.target.value as 'base' | 'free'
+                                source: e.target.value as EventSource
                             })}
+                            required
                         >
-                            <option value="base">Base Time</option>
+                            <option value="base">Normal Event</option>
                             <option value="free">Free Time</option>
+                            <option value="assignment">Assignment</option>
                         </select>
                     </div>
 
                     <div className="grid gap-2">
-                        <Label htmlFor="startDate">Start Date and Time</Label>
+                        <Label htmlFor="startDate">Start Date and Time (UTC)</Label>
                         <Input
                             id="startDate"
                             type="datetime-local"
-                            value={format(newEvent.startDate, "yyyy-MM-dd'T'HH:mm")}
-                            onChange={(e) => setNewEvent({ ...newEvent, startDate: parseISO(e.target.value) })}
+                            value={dateToUTCString(newEvent.startDate)}
+                            onChange={(e) => handleDateChange(e.target.value, 'startDate')}
+                            required
                         />
+                        <p className="text-sm text-muted-foreground">
+                            Current selection: {newEvent.startDate.toISOString().slice(0, 16)} UTC
+                        </p>
                     </div>
                     <div className="grid gap-2">
-                        <Label htmlFor="endDate">End Date and Time</Label>
+                        <Label htmlFor="endDate">End Date and Time (UTC)</Label>
                         <Input
                             id="endDate"
                             type="datetime-local"
-                            value={format(newEvent.endDate, "yyyy-MM-dd'T'HH:mm")}
-                            onChange={(e) => setNewEvent({ ...newEvent, endDate: parseISO(e.target.value) })}
+                            value={dateToUTCString(newEvent.endDate)}
+                            onChange={(e) => handleDateChange(e.target.value, 'endDate')}
+                            required
                         />
+                        <p className="text-sm text-muted-foreground">
+                            Current selection: {newEvent.endDate.toISOString().slice(0, 16)} UTC
+                        </p>
                     </div>
                     <div className="grid gap-2">
                         <Label htmlFor="description">Description</Label>
@@ -993,7 +1249,7 @@ function AddEventDialog({ newEvent, setNewEvent, handleAddEvent }: AddEventDialo
                         />
                     </div>
                 </div>
-                <Button onClick={handleAddEvent}>Add Event</Button>
+                <Button onClick={handleSubmit}>Add Event</Button>
             </DialogContent>
         </Dialog>
     );
@@ -1052,13 +1308,13 @@ function EventDetailsDialog({ event, setSelectedEvent }: {
                             <div className="space-y-4">
                                 <div>
                                     <p className="text-sm font-medium text-muted-foreground">Start</p>
-                                    <p className="text-base font-semibold">{format(event.startDate, 'PPP')}</p>
-                                    <p className="text-sm font-medium">{format(event.startDate, 'p')}</p>
+                                    <p className="text-base font-semibold">{new Date(event.startDate).toISOString().slice(0, 10)}</p>
+                                    <p className="text-sm font-medium">{new Date(event.startDate).toISOString().slice(11, 16)} UTC</p>
                                 </div>
                                 <div>
                                     <p className="text-sm font-medium text-muted-foreground">End</p>
-                                    <p className="text-base font-semibold">{format(event.endDate, 'PPP')}</p>
-                                    <p className="text-sm font-medium">{format(event.endDate, 'p')}</p>
+                                    <p className="text-base font-semibold">{new Date(event.endDate).toISOString().slice(0, 10)}</p>
+                                    <p className="text-sm font-medium">{new Date(event.endDate).toISOString().slice(11, 16)} UTC</p>
                                 </div>
                             </div>
                             {event.description && (
@@ -1077,12 +1333,28 @@ function EventDetailsDialog({ event, setSelectedEvent }: {
 
 const CalendarLegend = () => (
   <div className="flex items-center gap-6 text-sm mb-4 bg-white p-3 rounded-lg shadow-sm">
-    {Object.entries(EVENT_COLORS).map(([source, colors]) => (
-      <div key={source} className="flex items-center gap-2">
-        <span className={`w-3 h-3 rounded-full ${colors.dot}`}></span>
-        <span className="font-medium capitalize">{source} Events</span>
-      </div>
-    ))}
+    {Object.entries(EVENT_COLORS).map(([source, colors]) => {
+      let displayName;
+      switch (source) {
+        case 'base':
+          displayName = 'Normal Events';
+          break;
+        case 'free':
+          displayName = 'Free Time';
+          break;
+        case 'assignment':
+          displayName = 'Assignment';
+          break;
+        default:
+          displayName = source;
+      }
+      return (
+        <div key={source} className="flex items-center gap-2">
+          <span className={`w-3 h-3 rounded-full ${colors.dot}`}></span>
+          <span className="font-medium capitalize">{displayName}</span>
+        </div>
+      );
+    })}
   </div>
 );
 
@@ -1136,4 +1408,185 @@ const removeConflictingEvents = async (userId: string, baseEvent: Event) => {
     } catch (error) {
         console.error("Error removing conflicting events:", error);
     }
+};
+
+// Add this helper function to check specific event conflicts
+const checkSpecificEventConflicts = (newEvent: Event, existingEvents: Event[], eventType: EventSource) => {
+    return existingEvents.filter(existingEvent => 
+        existingEvent.source === eventType && 
+        isOverlapping(
+            new Date(newEvent.startDate),
+            new Date(newEvent.endDate),
+            new Date(existingEvent.startDate),
+            new Date(existingEvent.endDate)
+        )
+    );
+};
+
+// Add this helper function to remove conflicting events
+const removeConflictingEventsFromTable = async (
+    tableName: string,
+    userId: string,
+    conflictingEvents: Event[]
+) => {
+    try {
+        const { data: tableData } = await supabase
+            .from(tableName)
+            .select('json_response')
+            .eq('user_id', userId)
+            .single();
+
+        if (tableData?.json_response?.events) {
+            const conflictingIds = new Set(conflictingEvents.map(e => e.id));
+            const filteredEvents = tableData.json_response.events.filter(
+                (event: Event) => !conflictingIds.has(event.id)
+            );
+
+            await supabase
+                .from(tableName)
+                .upsert({
+                    user_id: userId,
+                    json_response: { events: filteredEvents }
+                }, {
+                    onConflict: 'user_id'
+                });
+        }
+    } catch (error) {
+        console.error(`Error removing conflicting events from ${tableName}:`, error);
+        throw error;
+    }
+};
+
+// Add helper function to parse RRULE string
+const parseRecurrenceRule = (rrule: string): RecurrenceRule | undefined => {
+    if (!rrule) return undefined;
+
+    const parts = rrule.split(';').reduce((acc: any, part: string) => {
+        const [key, value] = part.split('=');
+        acc[key] = value;
+        return acc;
+    }, {});
+
+    const rule: RecurrenceRule = {
+        frequency: parts.FREQ as RecurrenceFrequency
+    };
+
+    if (parts.INTERVAL) rule.interval = parseInt(parts.INTERVAL);
+    if (parts.UNTIL) {
+        // Handle UNTIL date which might end with Z
+        const untilStr = parts.UNTIL.endsWith('Z') 
+            ? parts.UNTIL.slice(0, -1) 
+            : parts.UNTIL;
+        try {
+            rule.until = parseDateTime(untilStr);
+        } catch (error) {
+            console.error("Error parsing UNTIL date:", error);
+        }
+    }
+    if (parts.COUNT) rule.count = parseInt(parts.COUNT);
+    if (parts.BYDAY) rule.byDay = parts.BYDAY.split(',');
+    if (parts.BYMONTH) rule.byMonth = parts.BYMONTH.split(',').map(Number);
+    if (parts.BYMONTHDAY) rule.byMonthDay = parseInt(parts.BYMONTHDAY);
+
+    return rule;
+};
+
+// Add function to generate recurring event instances
+const generateRecurringEvents = (baseEvent: Event, rule: RecurrenceRule, until: Date): Event[] => {
+    const events: Event[] = [];
+    const startDate = new Date(baseEvent.startDate);
+    const endDate = new Date(baseEvent.endDate);
+    const duration = endDate.getTime() - startDate.getTime();
+
+    let currentDate = new Date(startDate);
+    let count = 0;
+    const maxCount = rule.count || 1000; // Reasonable limit for recurring events
+
+    while (currentDate <= (rule.until || until) && count < maxCount) {
+        const eventInstance: Event = {
+            ...baseEvent,
+            id: `${baseEvent.id}-${count}`,
+            parentEventId: baseEvent.id as string,
+            startDate: new Date(currentDate),
+            endDate: new Date(currentDate.getTime() + duration)
+        };
+        events.push(eventInstance);
+
+        // Calculate next occurrence based on frequency
+        switch (rule.frequency) {
+            case 'DAILY':
+                currentDate = addDays(currentDate, rule.interval || 1);
+                break;
+            case 'WEEKLY':
+                currentDate = addWeeks(currentDate, rule.interval || 1);
+                break;
+            case 'MONTHLY':
+                currentDate = addMonths(currentDate, rule.interval || 1);
+                break;
+            case 'YEARLY':
+                currentDate = addYears(currentDate, rule.interval || 1);
+                break;
+        }
+        count++;
+    }
+
+    return events;
+};
+
+const parseDateTime = (dateTimeStr: string): Date => {
+    console.log("Parsing datetime:", dateTimeStr);
+    
+    try {
+        // Remove any TZID if present and clean the string
+        const cleanStr = dateTimeStr.includes(':') ? dateTimeStr.split(':').pop()! : dateTimeStr;
+        console.log("Cleaned datetime string:", cleanStr);
+
+        // Basic format: YYYYMMDDTHHMMSS
+        if (cleanStr.length >= 8) {  // Ensure we have at least the date part
+            const year = parseInt(cleanStr.substring(0, 4));
+            const month = parseInt(cleanStr.substring(4, 6)) - 1; // months are 0-based
+            const day = parseInt(cleanStr.substring(6, 8));
+            
+            let hours = 0, minutes = 0, seconds = 0;
+            
+            // If we have time component (contains 'T')
+            if (cleanStr.includes('T') && cleanStr.length >= 14) {
+                const timeStart = cleanStr.indexOf('T') + 1;
+                hours = parseInt(cleanStr.substring(timeStart, timeStart + 2));
+                minutes = parseInt(cleanStr.substring(timeStart + 2, timeStart + 4));
+                seconds = parseInt(cleanStr.substring(timeStart + 4, timeStart + 6));
+            }
+            
+            console.log("Parsed components:", { year, month, day, hours, minutes, seconds });
+            
+            // Create date in UTC
+            const date = new Date(Date.UTC(year, month, day, hours, minutes, seconds));
+            console.log("Created UTC date:", date.toISOString());
+            
+            if (isNaN(date.getTime())) {
+                throw new Error("Invalid date created");
+            }
+            
+            return date;
+        }
+        
+        throw new Error(`Invalid date format: ${cleanStr}`);
+    } catch (error) {
+        console.error("Error parsing datetime:", error, "for string:", dateTimeStr);
+        throw error;
+    }
+};
+
+// Add this helper function to check for conflicts between two sets of events
+const findConflictingEvents = (newEvents: Event[], existingEvents: Event[]): Event[] => {
+    return existingEvents.filter(existingEvent => 
+        newEvents.some(newEvent => 
+            isOverlapping(
+                new Date(newEvent.startDate),
+                new Date(newEvent.endDate),
+                new Date(existingEvent.startDate),
+                new Date(existingEvent.endDate)
+            )
+        )
+    );
 };

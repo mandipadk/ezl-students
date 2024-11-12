@@ -306,7 +306,7 @@ export default function EmailCard() {
                       duration: 5000,
                     });
 
-                    const response = await fetch('http://localhost:3000/api/train-email', {
+                    const response = await fetch('https://3l6yeav6bb.execute-api.us-east-1.amazonaws.com/create_vector_store', {
                       method: 'POST',
                       headers: {
                         'Content-Type': 'application/json',

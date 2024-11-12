@@ -243,7 +243,7 @@ export default function AssignmentCard() {
         if (isAuthenticated && userId) {
           fetchAssignments(userId);
           setTokenStatus('verified');
-          const interval = setInterval(() => fetchAssignments(userId), 86400000); // Fetch assignments once a day
+          const interval = setInterval(() => fetchAssignments(userId), 600000); // Fetch assignments once every 10 minutes
           return () => clearInterval(interval);
         }
       }, [isAuthenticated, userId]);
@@ -357,7 +357,7 @@ export default function AssignmentCard() {
         
         setIsLoading(true);
         try {
-            const response = await fetch('http://localhost:3000/api/canvas', {
+            const response = await fetch('http://0.0.0.0:9000/api/start-fetch-assignments', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
