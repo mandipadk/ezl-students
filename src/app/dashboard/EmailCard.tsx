@@ -316,7 +316,7 @@ export default function EmailCard() {
                       </div>
                     );
 
-                    const response = await fetch('https://d8wpi37yt3.execute-api.us-east-1.amazonaws.com/create_vector_store', {
+                    const response = await fetch('http://localhost:8000/api/create_vector_store', {
                       method: 'POST',
                       headers: {
                         'Content-Type': 'application/json',
@@ -324,6 +324,7 @@ export default function EmailCard() {
                       body: JSON.stringify({
                         user_id: userId,
                         access_token: token,
+                        provider: "azure",
                       }),
                     });
 
