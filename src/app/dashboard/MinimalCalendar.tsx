@@ -8,8 +8,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { createClient } from "@supabase/supabase-js";
-import { toast } from "sonner";
+import { supabase } from '@/lib/supabase'
+import { api } from '@/lib/api-client'
+import { toast } from "sonner"
 
 type EventSource = 'base' | 'free' | 'assignment';
 
@@ -57,11 +58,6 @@ const EVENT_COLORS = {
     dot: "bg-purple-500"
   }
 };
-
-const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
 
 type CalendarView = 'month' | 'week' | 'day';
 
@@ -992,22 +988,18 @@ const checkAuthentication = async () => {
             id: 'ai-processing',
         });
 
-        const response = await fetch('http://localhost:7777/schedule', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                user_id: userId,
-            }),
+        // Start the scheduling process
+        await api.calendar.schedule({
+            user_id: userId,
         });
 
-        if (response.ok) {
-            // Start polling for completion
-            const pollInterval = setInterval(async () => {
-                console.log("Polling for schedule status");
-                const pollResponse = await fetch(`http://localhost:7777/schedule/status?user_id=${userId}`);
-                const status = await pollResponse.json();
+        // Start polling for completion
+        const pollInterval = setInterval(async () => {
+            console.log("Polling for schedule status");
+            try {
+                const status = await api.calendar.getScheduleStatus({
+                    user_id: userId,
+                });
                 
                 if (status.completed) {
                     clearInterval(pollInterval);
@@ -1018,20 +1010,25 @@ const checkAuthentication = async () => {
                         duration: 5000,
                     });
                 }
-            }, 10000);
-
-            // Clear interval after 6 minutes (timeout)
-            setTimeout(() => {
+            } catch (error) {
+                console.error("Error polling schedule status:", error);
                 clearInterval(pollInterval);
                 setIsAIProcessing(false);
-                toast.error("AI prioritization is taking longer than expected. Please check back in few minutes.", {
+                toast.error("Failed to check schedule status. Please try again.", {
                     duration: 5000,
                 });
-            }, 60000);
+            }
+        }, 10000);
 
-        } else {
-            throw new Error("Failed to start AI prioritization");
-        }
+        // Clear interval after 6 minutes (timeout)
+        setTimeout(() => {
+            clearInterval(pollInterval);
+            setIsAIProcessing(false);
+            toast.error("AI prioritization is taking longer than expected. Please check back in few minutes.", {
+                duration: 5000,
+            });
+        }, 360000); // 6 minutes
+
     } catch (error) {
         console.error("Error in AI prioritization:", error);
         setIsAIProcessing(false);

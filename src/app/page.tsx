@@ -10,8 +10,8 @@ export default function HomePage() {
           <div className="lg:grid lg:grid-cols-12 lg:gap-8">
             <div className="sm:text-center md:max-w-2xl md:mx-auto lg:col-span-6 lg:text-left">
               <h1 className="text-4xl font-bold text-gray-900 tracking-tight sm:text-5xl md:text-6xl">
-                Get Things Done
-                <span className="block text-[#3C82F6]">With Precision and Speed</span>
+                Effortless Planning
+                <span className="block text-[#3C82F6]">Maximum Results</span>
               </h1>
               <p className="mt-3 text-base text-gray-500 sm:mt-5 sm:text-xl lg:text-lg xl:text-xl">
                 Discover our AI-powered email and calendar app designed to help you

@@ -4,19 +4,12 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
-import { createClient } from "@supabase/supabase-js"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { AssignmentDetailsSheet } from "./AssignmentDetailsSheet"
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import { toast } from "sonner"
+import { api } from "@/lib/api-client"
+import { supabase } from "@/lib/supabase"
+import { ErrorBoundary } from "@/components/ErrorBoundary"
 
 // Update the Assignment type to match the exact JSON structure
 export type Assignment = {
@@ -262,7 +255,6 @@ export default function AssignmentCard() {
     };
 
     const fetchAssignments = async (user_id: string) => {
-        console.log("Fetching assignments for user:", user_id);
         try {
             const { data, error } = await supabase
                 .from("CanvasEvent")
@@ -270,14 +262,10 @@ export default function AssignmentCard() {
                 .eq("user_id", user_id);
 
             if (error) {
-                console.error("Error fetching assignments:", error);
-                setIsFetching(false);
-                setErrorMessage("Failed to fetch assignments. Please try again.");
-                return;
+                throw error;
             }
 
             if (data && data.length > 0) {
-                console.log("Assignments fetched:", data);
                 const parsedAssignments = data.flatMap(item => {
                     try {
                         if (typeof item.json_response === 'object' && 
@@ -349,45 +337,44 @@ export default function AssignmentCard() {
             console.error("Error in fetchAssignments:", error);
             setIsFetching(false);
             setErrorMessage("An unexpected error occurred. Please try again.");
+            toast.error("Failed to fetch assignments");
         }
     };
 
     const handleTokenSubmit = async () => {
-        if (!accessToken || !userId) return;
-        
+        if (!accessToken || !userId) {
+            toast.error("Missing required credentials");
+            return;
+        }
+
         setIsLoading(true);
         try {
-            const response = await fetch('http://0.0.0.0:9000/api/start-fetch-assignments', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    access_token: accessToken,
-                    user_id: userId,
-                }),
+            toast.info("Starting Canvas sync...");
+            
+            const response = await api.canvas.startFetchAssignments({
+                access_token: accessToken,
+                user_id: userId,
             });
 
-            if (response.ok) {
-                const data = await response.json();
-                if (data.status === "success") {
-                    setTokenStatus('verified');
-                    setShowTokenInput(false);
-                    setIsFetching(true);  // Start fetching state
-                    await fetchAssignments(userId);
-                    // setIsFetching(false); // End fetching state
-                } else {
-                    setTokenStatus('failed');
-                    setShowTokenInput(false);
-                }
+            if (response.status === "success" || (response.data && response.data.status === "success")) {
+                setTokenStatus('verified');
+                setShowTokenInput(false);
+                setIsFetching(true);
+                toast.success("Canvas sync started successfully", {
+                    description: "Your assignments will appear shortly...",
+                    duration: 5000,
+                });
+                await fetchAssignments(userId);
             } else {
                 setTokenStatus('failed');
                 setShowTokenInput(false);
+                toast.error("Failed to verify Canvas token");
             }
         } catch (error) {
             console.error("Error sending access token:", error);
             setTokenStatus('failed');
             setShowTokenInput(false);
+            toast.error("Failed to verify Canvas token");
         } finally {
             setIsLoading(false);
         }
